@@ -5,8 +5,8 @@
 
 ## 0. Quick Rehydrate (≤ 60s)
 
-- **Project**: [TÊN PRODUCT CỦA TEAM] — [1 câu mô tả].
-- **Stack**: Python 3.11 / FastAPI / LangGraph / LangChain / [frontend?].
+- **Project**: LitReview Agent — hỗ trợ literature review có citation/evidence.
+- **Stack**: Python 3.11 / FastAPI / LangGraph / LangChain / frontend TBD.
 - **Dev**: `uvicorn src.main:app --reload` (backend), `[lệnh frontend]`.
 - **Test**: `make test`. **Eval**: `python eval/run_eval.py`.
 - **Env**: copy `.env.example` → `.env`, thêm `OPENAI_API_KEY` (optional — mock-first).
@@ -22,7 +22,9 @@
 ## 0.2 Known Ambiguities / Mismatches (inspire team 011)
 
 Liệt kê chỗ doc-vs-code lệch để agent không tin doc stale:
-- [team điền khi phát hiện mismatch, vd: "PRD nói dùng Gemini nhưng code đang OpenAI"]
+- PRD dự kiến Python 3.11 nhưng môi trường hiện tại là Python 3.13; CI vẫn là source of truth.
+- Frontend và nền tảng deploy chưa chốt; xem `docs/prd.md` mục 9.
+- `src/main.py` còn title template `AI20K Agent`; cần đổi cùng PR backend trước demo.
 
 ## 1. Quyết định kỹ thuật (link ADR)
 

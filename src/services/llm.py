@@ -51,8 +51,22 @@ def get_llm(task_type: TaskType = "generate") -> ChatOpenAI:
     # Judge cần temperature thấp để chấm điểm ổn định, không sáng tạo.
     temperature = 0.0 if task_type in ("classify", "judge") else settings.llm_temperature
 
+    if settings.llm_provider == "openrouter":
+        api_key = settings.openrouter_api_key
+        base_url = settings.openrouter_base_url
+    else:
+        api_key = settings.openai_api_key
+        base_url = None
+
+    if not api_key:
+        raise ValueError(
+            f"Thiếu API key cho LLM_PROVIDER={settings.llm_provider}. "
+            "Cấu hình key trong .env trước khi gọi LLM."
+        )
+
     return ChatOpenAI(
         model=model_name,
-        api_key=settings.openai_api_key,
+        api_key=api_key,
+        base_url=base_url,
         temperature=temperature,
     )
