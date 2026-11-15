@@ -7,6 +7,7 @@ bản nháp có citation/evidence và export DOCX sau khi người dùng phê du
 
 Tài liệu sản phẩm:
 
+- [Gate 1 submission index](docs/gate-1.md)
 - [Project Brief](docs/brief.md)
 - [PRD](docs/prd.md)
 - [Wireframe / UI Flow](docs/ui-flow.md)
