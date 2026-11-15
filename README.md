@@ -1,8 +1,16 @@
-# AI20K Agent Template
+# LitReview Agent
 
-Template chính thức cho học viên VinUni AI20K Build Phase: cấu trúc dự án, code
-mẫu và hướng dẫn kỹ thuật để xây dựng một AI Agent hoàn chỉnh — từ kiến trúc,
-code, test cho đến deploy và nộp bài Demo Day.
+AI Agent hỗ trợ quy trình Literature Review từ tìm kiếm và sàng lọc bài báo đến
+bản nháp có citation/evidence và export DOCX sau khi người dùng phê duyệt.
+
+Đội: **P-107** · Mã đề: **EDU-09** · Giai đoạn: **Gate 1**
+
+Tài liệu sản phẩm:
+
+- [Gate 1 submission index](docs/gate-1.md)
+- [Project Brief](docs/brief.md)
+- [PRD](docs/prd.md)
+- [Wireframe / UI Flow](docs/ui-flow.md)
 
 Technical Guidebook: <https://phoenix.note.transformerlabs.ai/technical-book>
 
@@ -36,8 +44,8 @@ GitHub của khoá bạn đang học và đặt tên theo mã đội. Copy URL �
 Phoenix rồi clone về:
 
 ```bash
-git clone https://github.com/<ORG-CỦA-KHOÁ>/<MÃ-ĐỘI>.git
-cd <MÃ-ĐỘI>
+git clone https://github.com/AI20K-Build-Phase-Cohort-5/P-107.git
+cd P-107
 ```
 
 Không cần `rm -rf .git`, `git init` hay `git remote add`: repo sinh từ template
@@ -83,6 +91,14 @@ uvicorn src.main:app --reload --port 8000
 Swagger UI ở <http://localhost:8000/docs>. Hoặc dùng `make run`, `make test`,
 `make lint`, `make eval` (chạy agent qua golden dataset — không cần API key) — xem
 `Makefile`.
+
+## Thành viên và vai trò
+
+| Thành viên | Vai trò |
+|---|---|
+| Long Nhat | Product / backend |
+| KemmVSAI | Agent / QA |
+| Các thành viên còn lại | Cập nhật sau buổi phân công chính thức |
 
 ## Cấu trúc thư mục
 
@@ -154,7 +170,7 @@ bằng bất kỳ markdown viewer nào.
 |---|---|
 | Agent | LangGraph + LangChain 0.3 |
 | Backend | FastAPI 0.115 + Uvicorn |
-| LLM | OpenAI, mặc định `gpt-4o-mini` (đổi trong `src/config.py`) |
+| LLM | OpenRouter/OpenAI-compatible API, model cấu hình trong `.env` |
 | Giao diện | Next.js hoặc Streamlit (đội tự chọn, hướng dẫn ở chương 6) |
 | Lint / test | ruff + pytest 8 |
 | DevOps | Docker + GitHub Actions |
