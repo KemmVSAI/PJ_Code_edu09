@@ -23,7 +23,10 @@ class Settings(BaseSettings):
     # LLM — cascade router: mỗi task type một model (bài học cost-management:
     # không đốt model mạnh cho việc classify). Judge PHẢI khác model generator
     # để tránh self-preference bias (bài học team 002 — eval judge riêng).
+    llm_provider: Literal["openai", "openrouter"] = "openai"
     openai_api_key: str = ""
+    openrouter_api_key: str = ""
+    openrouter_base_url: str = "https://openrouter.ai/api/v1"
     model_name: str = "gpt-4o"  # legacy alias cho model_generate
     model_classify: str = "gpt-4o-mini"  # cheap: classify / route / quyết định tool
     model_generate: str = "gpt-4o"  # strong: sinh câu trả lời cuối

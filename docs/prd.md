@@ -83,7 +83,8 @@ API/domain validation, không chỉ trong prompt.
 ## 8. Tech stack (dự kiến)
 
 - Python 3.11, FastAPI/Uvicorn, Pydantic, SQLite.
-- LangGraph/LangChain cho một workflow agent; OpenAI cho LLM.
+- LangGraph/LangChain cho một workflow agent; OpenRouter qua API tương thích
+  OpenAI cho LLM (provider được cấu hình bằng `LLM_PROVIDER`).
 - Frontend Next.js hoặc Streamlit (chưa chốt — xem mục 9).
 - pytest + ruff; Docker + GitHub Actions; deploy backend trên nền tảng phù hợp.
 - MVP không cần vector store: evidence chunk được lưu/truy xuất trong database.
@@ -250,7 +251,7 @@ test tương ứng. LLM và OpenAlex phải mock được để test chạy khô
 |---|---|
 | Backend | Python 3.11, FastAPI/Uvicorn, Pydantic |
 | Agent | LangGraph/LangChain, một workflow nhiều node |
-| LLM | OpenAI, một provider; mock-first khi test |
+| LLM | OpenRouter qua API tương thích OpenAI, một provider; mock-first khi test |
 | Source | OpenAlex, nguồn học thuật duy nhất |
 | Database | SQLite |
 | Retrieval | Evidence Chunk store trong database, không vector DB riêng |
