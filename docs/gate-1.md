@@ -18,6 +18,7 @@
 
 ## Tóm tắt sản phẩm
 
+
 LitReview Agent là ứng dụng AI hỗ trợ người nghiên cứu tìm kiếm, sàng lọc, tóm tắt và tổng hợp tài liệu khoa học dựa trên metadata và abstract công khai.
 
 Sản phẩm sử dụng AI để hỗ trợ phân tích và tạo nội dung Literature Review có trích dẫn, evidence truy xuất được. Người dùng giữ quyền kiểm soát thông qua Human-in-the-Loop (HITL): xác nhận kết quả sàng lọc, chỉnh sửa nội dung, kiểm tra bằng chứng và phê duyệt trước khi xuất báo cáo DOCX.
