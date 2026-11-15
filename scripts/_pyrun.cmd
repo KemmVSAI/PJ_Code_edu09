@@ -9,6 +9,11 @@ if %ERRORLEVEL%==0 (
   exit /b %ERRORLEVEL%
 )
 
+if exist .venv\Scripts\python.exe (
+  .venv\Scripts\python.exe %*
+  exit /b %ERRORLEVEL%
+)
+
 where python >nul 2>nul
 if %ERRORLEVEL%==0 (
   python %*
