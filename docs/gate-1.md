@@ -3,7 +3,7 @@
 **Đội:** P-107  
 **Mã đề:** EDU-09  
 **Sản phẩm:** LitReview Agent  
-**Trạng thái:** Đã hoàn thiện deliverables – chờ review và merge Pull Request
+**Trạng thái:** Đã hoàn thiện deliverables
 
 ## Minh chứng
 
@@ -12,7 +12,7 @@
 | 1-page Brief | [docs/brief.md](brief.md) |
 | PRD | [docs/prd.md](prd.md) |
 | Wireframe / UI Flow | [docs/ui-flow.md](ui-flow.md) |
-| Figma Prototype | [Mở Figma Prototype](https://www.figma.com/proto/eW4brEY4KRxAfE30CrwlNI/Untitled?node-id=4-88&p=f&t=c8hpFrrKrJLHQwQM-1&scaling=min-zoom&content-scaling=fixed&page-id=0%3A1&starting-point-node-id=4%3A88) |
+| Figma Prototype | [Mở Figma Prototype](https://www.figma.com/proto/5WKfmTTl6FRfH4Kt8LaDFX/Untitled?t=IcE6LSIqk3kZ5GHI-1&scaling=min-zoom&content-scaling=fixed&page-id=0%3A1&node-id=3-51&starting-point-node-id=3%3A2&show-proto-sidebar=1) |
 | GitHub Repository | [README](../README.md), [PROJECT_CONTEXT](../PROJECT_CONTEXT.md) |
 | AI Log | Đã gửi thành công, nhận HTTP 202 |
 
