@@ -86,3 +86,64 @@ class AgentAnswer(BaseModel):
         if self.verdict == "supported" and self.confidence < 0.6:
             return False
         return True
+
+
+# ---------------------------------------------------------------------------
+# Research Session & Academic Search — theo PRD v1.1 mục 11.2 (Search, Session)
+# W1 scope: tạo session, search OpenAlex chuẩn hóa, thêm paper vào Working Set.
+# ---------------------------------------------------------------------------
+
+SessionCreateRequest = ChatRequest  # message = research question; tái dùng validate length
+
+
+class SessionOut(BaseModel):
+    session_id: str = Field(..., description="ID phiên nghiên cứu (thread_id cho agent)")
+    research_question: str = Field(..., description="Câu hỏi nghiên cứu")
+    corpus_version: int = Field(default=1, description="Chỉ tăng khi membership Confirmed Corpus đổi")
+    created_at: str = Field(..., description="ISO timestamp")
+
+
+class SearchRequest(BaseModel):
+    session_id: str = Field(..., description="Session hiện tại")
+    query: str = Field(..., min_length=1, max_length=300, description="Query tìm kiếm OpenAlex")
+    max_results: int = Field(default=10, ge=1, le=50, description="Số kết quả tối đa (page size cố định)")
+
+
+class PaperOut(BaseModel):
+    """Paper metadata chuẩn hóa từ OpenAlex — FR-SRCH-01/02/06."""
+
+    paper_id: str = Field(..., description="OpenAlex ID (W...)")
+    session_id: str = Field("", description="Session sở hữu (rỗng = kết quả search chưa thêm)")
+    title: str = Field(..., description="Tiêu đề paper")
+    authors: list[str] = Field(default_factory=list, description="Danh sách tác giả")
+    year: int | None = Field(default=None, description="Năm xuất bản")
+    venue: str = Field("", description="Tạp chí/hội nghị")
+    doi: str = Field("", description="DOI đã chuẩn hóa (rỗng nếu không có)")
+    abstract: str = Field("", description="Abstract nguyên văn; rỗng nếu nguồn không có")
+    source_type: Literal["metadata_only", "abstract"] = Field(
+        ..., description="metadata_only = không có abstract; abstract = có abstract"
+    )
+    openalex_url: str = Field("", description="Link OpenAlex")
+
+
+class SearchResponse(BaseModel):
+    session_id: str
+    query: str
+    results: list[PaperOut]
+    total_results: int = Field(0, description="Tổng số kết quả OpenAlex báo về")
+    truncated: bool = Field(False, description="True nếu OpenAlex lỗi một phần / kết quả tải dở")
+    error: str = Field("", description="Thông báo lỗi nếu OpenAlex không khả dụng (FR-SRCH-05)")
+
+
+class AddPapersRequest(BaseModel):
+    session_id: str = Field(...)
+    paper_ids: list[str] = Field(..., min_length=1, description="Danh sách OpenAlex ID cần thêm")
+
+
+class AddPapersResponse(BaseModel):
+    session_id: str
+    added: list[PaperOut] = Field(default_factory=list, description="Paper thêm mới thành công")
+    skipped_duplicates: list[str] = Field(
+        default_factory=list, description="ID bị chặn vì trùng OpenAlex ID/DOI trong session (FR-SRCH-04)"
+    )
+    working_set: list[PaperOut] = Field(default_factory=list, description="Working Set hiện tại của session")
