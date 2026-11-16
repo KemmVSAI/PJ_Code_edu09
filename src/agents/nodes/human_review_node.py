@@ -26,11 +26,13 @@ async def human_review_node(state: AgentState) -> dict:
         # Vào node này mà không có gì chờ duyệt là bug graph — raise, không im lặng.
         raise RuntimeError("human_review được gọi nhưng pending_action trống")
 
-    answer = interrupt({
-        "question": "Phê duyệt hành động rủi ro này của agent?",
-        "tool": pending["tool"],
-        "args": pending["args"],
-    })
+    answer = interrupt(
+        {
+            "question": "Phê duyệt hành động rủi ro này của agent?",
+            "tool": pending["tool"],
+            "args": pending["args"],
+        }
+    )
 
     if answer not in ("approve", "reject"):
         raise ValueError(f"Giá trị resume không hợp lệ: {answer!r} (chờ 'approve' | 'reject')")

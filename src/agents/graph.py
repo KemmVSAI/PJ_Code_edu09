@@ -80,6 +80,7 @@ def make_entry_node(max_iterations: int):
 # giờ xảy ra — tức no-op. Bốn router dưới đây đều được test phủ.)
 # ---------------------------------------------------------------------------
 
+
 def route_after_guardrail(state: AgentState) -> str:
     """Input bị chặn -> finalize (nhắn từ chối); hợp lệ -> reason."""
     return "finalize" if state.get("refusal_reason") else "reason"

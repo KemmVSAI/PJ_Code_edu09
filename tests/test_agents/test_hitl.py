@@ -56,10 +56,12 @@ async def test_rejected_risky_tool_is_blocked_and_graph_still_terminates():
 
 @pytest.mark.asyncio
 async def test_safe_tool_never_interrupts():
-    reasoner = ScriptedReasoner([
-        AgentDecision(thought="calc", action="tool", tool_name="calculate", tool_args={"expression": "1+1"}),
-        _final(),
-    ])
+    reasoner = ScriptedReasoner(
+        [
+            AgentDecision(thought="calc", action="tool", tool_name="calculate", tool_args={"expression": "1+1"}),
+            _final(),
+        ]
+    )
     graph = make_test_graph(reasoner)
     result = await graph.ainvoke({"query": "Tính 1+1"}, config=CONFIG)
     assert "__interrupt__" not in result

@@ -60,13 +60,28 @@ def get_llm(task_type: TaskType = "generate") -> ChatOpenAI:
 
     if not api_key:
         raise ValueError(
-            f"Thiếu API key cho LLM_PROVIDER={settings.llm_provider}. "
-            "Cấu hình key trong .env trước khi gọi LLM."
+            f"Thiếu API key cho LLM_PROVIDER={settings.llm_provider}. Cấu hình key trong .env trước khi gọi LLM."
         )
+
+    # max_tokens theo task: classify/judge trả JSON ngắn → 300 đủ; generate theo config.
+    # OpenRouter free-tier tính cả max_tokens vào credit check — yêu cầu quá lớn
+    # bị 402 dù đầu ra thực tế ngắn.
+    task_max_tokens = 300 if task_type in ("classify", "judge") else settings.llm_max_tokens
 
     return ChatOpenAI(
         model=model_name,
         api_key=api_key,
         base_url=base_url,
         temperature=temperature,
+        max_tokens=task_max_tokens,
     )
+
+
+def structured_llm(task_type: str, schema: type):
+    """LLM với structured output qua function_calling — OpenRouter-safe.
+
+    method mặc định của langchain (json_schema strict) bị OpenRouter 400
+    ("Provider returned error") với một số model; function_calling chạy ổn
+    trên cùng model. Đây là đường duy nhất để reason/finalize chạy thật.
+    """
+    return get_llm(task_type).with_structured_output(schema, method="function_calling")

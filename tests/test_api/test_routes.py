@@ -50,15 +50,15 @@ async def test_resume_surfaces_second_interrupt(client, monkeypatch):
     from tests.conftest import ScriptedReasoner, make_test_graph
 
     email = AgentDecision(
-        thought="gửi", action="tool", tool_name="send_email",
+        thought="gửi",
+        action="tool",
+        tool_name="send_email",
         tool_args={"to": "a@example.com", "subject": "s", "body": "b"},
     )
     monkeypatch.setattr(routes, "agent", make_test_graph(ScriptedReasoner([email, email])))
 
     first = (await client.post("/api/v1/chat", json={"message": "Gửi 2 email"})).json()
-    resumed = await client.post(
-        "/api/v1/chat/resume", json={"session_id": first["session_id"], "resume": "approve"}
-    )
+    resumed = await client.post("/api/v1/chat/resume", json={"session_id": first["session_id"], "resume": "approve"})
 
     assert resumed.status_code == 200
     assert resumed.json()["response"].startswith("[CẦN PHÊ DUYỆT]")

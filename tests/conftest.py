@@ -5,6 +5,11 @@ không cần monkeypatch ChatOpenAI — mock đúng tầng (tại seam), phần 
 được test thật 100%.
 """
 
+import os
+
+# Test không gọi network: OpenAlex connector đọc env lúc chạy, set trước khi import app.
+os.environ.setdefault("OPENALEX_MOCK", "1")
+
 from unittest.mock import AsyncMock
 
 import pytest_asyncio

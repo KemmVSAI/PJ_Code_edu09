@@ -12,14 +12,14 @@ from __future__ import annotations
 from typing import Literal, TypedDict
 
 Stage = Literal[
-    "guardrail",   # kiểm tra input đầu vào
-    "reason",      # LLM quyết định: gọi tool hay trả lời
-    "act",         # thực thi tool an toàn
+    "guardrail",  # kiểm tra input đầu vào
+    "reason",  # LLM quyết định: gọi tool hay trả lời
+    "act",  # thực thi tool an toàn
     "human_review",  # HITL interrupt cho tool rủi ro (send_email, delete...)
-    "assess",      # self-assessment: đủ dữ kiện chưa? vượt max_iterations?
-    "finalize",    # sinh câu trả lời cuối đầy đủ
-    "partial",     # sinh câu trả lời với dữ kiện thiếu (escape hatch)
-    "refusal",     # từ chối do guardrail chặn input
+    "assess",  # self-assessment: đủ dữ kiện chưa? vượt max_iterations?
+    "finalize",  # sinh câu trả lời cuối đầy đủ
+    "partial",  # sinh câu trả lời với dữ kiện thiếu (escape hatch)
+    "refusal",  # từ chối do guardrail chặn input
 ]
 
 
