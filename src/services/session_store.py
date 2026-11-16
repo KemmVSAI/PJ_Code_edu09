@@ -132,12 +132,20 @@ def _db_file() -> Path:
 
 
 def _conn() -> sqlite3.Connection:
-    """Connection per-thread (uvicorn async worker) — SQLite ghi tuần tự an toàn."""
+    """Connection per-thread (uvicorn async worker) — SQLite ghi tuần tự an toàn.
+
+    Phoenix-mentor review (PR #6): async context nhiều task dùng chung thread
+    có thể gây 'database is locked' khi ghi đồng thời. Mitigation:
+    - busy_timeout 30s: writer chờ writer thay vì lỗi ngay.
+    - journal_mode=WAL: đọc không chặn ghi, phù hợp FastAPI threadpool.
+    """
     if getattr(_LOCAL, "conn", None) is None:
         db_path = _db_file()
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-        _LOCAL.conn = sqlite3.connect(db_path)
+        _LOCAL.conn = sqlite3.connect(db_path, timeout=30.0)
         _LOCAL.conn.row_factory = sqlite3.Row
+        _LOCAL.conn.execute("PRAGMA busy_timeout = 30000")
+        _LOCAL.conn.execute("PRAGMA journal_mode = WAL")
         _LOCAL.conn.executescript(_SCHEMA)
         _LOCAL.conn.commit()
     return _LOCAL.conn
