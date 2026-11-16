@@ -172,3 +172,324 @@ async def get_working_set(session_id: str):
     if session_store.get_session(session_id) is None:
         raise HTTPException(status_code=404, detail="Session không tồn tại")
     return session_store.get_working_set(session_id)
+
+
+# ---------------------------------------------------------------------------
+# Smart Screening (W2 — PRD v1.1 mục 11.2): phân loại AI + user review.
+# ---------------------------------------------------------------------------
+
+from src.models.schemas import (  # noqa: E402
+    ReviewDecisionRequest,
+    ReviewDecisionResponse,
+    ScreeningItemOut,
+    ScreenRequest,
+    ScreenResponse,
+)
+from src.services import screening as screening_service  # noqa: E402
+
+
+@router.post("/screen", response_model=ScreenResponse)
+async def screen_papers(request: ScreenRequest):
+    """Phân loại AI các paper trong Working Set (FR-SCRN-01..09).
+
+    Batch tối đa 10 paper/lần; chỉ screen paper chưa có kết quả completed
+    trừ khi chỉ định paper_ids cụ thể. Lỗi kỹ thuật trả classification_status
+    failed/timeout — không gán nhãn nghiệp vụ giả.
+    """
+    session = session_store.get_session(request.session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session không tồn tại")
+
+    working_set = {p.paper_id: p for p in session_store.get_working_set(request.session_id)}
+    existing = {s["paper_id"]: s for s in session_store.list_screening(request.session_id)}
+
+    # Chọn paper cần screen: chỉ định trước hoặc chưa có kết quả completed
+    if request.paper_ids:
+        targets = [working_set[pid] for pid in request.paper_ids if pid in working_set]
+        missing = [pid for pid in request.paper_ids if pid not in working_set]
+        if missing:
+            raise HTTPException(status_code=404, detail=f"Paper không trong Working Set: {missing}")
+    else:
+        targets = [
+            p for pid, p in working_set.items() if existing.get(pid, {}).get("classification_status") != "completed"
+        ][:10]  # batch 10 (PRD mục 10.3)
+
+    results: list[ScreeningItemOut] = []
+    # Giữ kết quả đã có của các paper không được screen lần này
+    for pid, p in working_set.items():
+        if p not in targets and pid in existing:
+            results.append(ScreeningItemOut(title=p.title, **existing[pid]))
+
+    for paper in targets:
+        outcome = await screening_service.classify_paper(paper, session["research_question"])
+        session_store.save_screening_result(
+            request.session_id,
+            paper.paper_id,
+            classification_status=outcome["classification_status"],
+            classification_error=outcome.get("classification_error", ""),
+            ai_classification=outcome.get("ai_classification"),
+            reason=outcome.get("reason", ""),
+            evidence=outcome.get("evidence"),
+        )
+        stored = session_store.get_screening(request.session_id, paper.paper_id)
+        results.append(ScreeningItemOut(title=paper.title, **stored))
+
+    summary = screening_service.summarize_batch([r.model_dump() for r in results])
+    return ScreenResponse(session_id=request.session_id, results=results, summary=summary)
+
+
+@router.get("/sessions/{session_id}/screening", response_model=list[ScreeningItemOut])
+async def get_screening_results(session_id: str):
+    """Kết quả screening đã lưu của session — restore sau reload (FR-SES-04)."""
+    if session_store.get_session(session_id) is None:
+        raise HTTPException(status_code=404, detail="Session không tồn tại")
+    working = {p.paper_id: p for p in session_store.get_working_set(session_id)}
+    items = []
+    for s in session_store.list_screening(session_id):
+        paper = working.get(s["paper_id"])
+        items.append(ScreeningItemOut(title=paper.title if paper else "(paper đã xóa)", **s))
+    return items
+
+
+@router.post("/screen/review", response_model=ReviewDecisionResponse)
+async def review_decision(request: ReviewDecisionRequest):
+    """Áp quyết định Accept/Reject/Override của người dùng (FR-SCRN-04).
+
+    - Accept: chỉ hợp lệ cho nhãn judged (Relevant/Partially Relevant/Not
+      Relevant); Insufficient Evidence KHÔNG được Accept trực tiếp (FR-SCRN-05).
+    - Override: bắt buộc kèm final_classification trong 3 nhãn judged.
+    - ai_classification không bao giờ bị ghi đè.
+    - corpus_version chỉ tăng khi membership thay đổi (FR-SES-07).
+    """
+    if session_store.get_session(request.session_id) is None:
+        raise HTTPException(status_code=404, detail="Session không tồn tại")
+    stored = session_store.get_screening(request.session_id, request.paper_id)
+    if stored is None:
+        raise HTTPException(status_code=404, detail="Paper chưa được screening")
+
+    ai_label = stored.get("ai_classification")
+    decision = request.decision
+
+    if decision == "accept":
+        if ai_label not in ("Relevant", "Partially Relevant", "Not Relevant"):
+            raise HTTPException(
+                status_code=422,
+                detail="Không thể Accept 'Insufficient Evidence' — dùng Reject hoặc Override (FR-SCRN-05)",
+            )
+        review_status, final = "Accepted", ai_label
+    elif decision == "reject":
+        review_status, final = "Rejected", None
+    else:  # override
+        if request.final_classification not in ("Relevant", "Partially Relevant", "Not Relevant"):
+            raise HTTPException(
+                status_code=422,
+                detail="Override phải kèm final_classification trong 3 nhãn: Relevant / Partially Relevant / Not Relevant",
+            )
+        review_status, final = "Overridden", request.final_classification
+
+    corpus_version = session_store.apply_review_decision(
+        request.session_id,
+        request.paper_id,
+        review_status,
+        final,
+        request.override_note,
+    )
+    in_corpus = final in ("Relevant", "Partially Relevant") and review_status in ("Accepted", "Overridden")
+    return ReviewDecisionResponse(
+        session_id=request.session_id,
+        paper_id=request.paper_id,
+        review_status=review_status,
+        final_classification=final,
+        corpus_version=corpus_version,
+        in_corpus=in_corpus,
+    )
+
+
+@router.get("/sessions/{session_id}/corpus", response_model=list)
+async def get_corpus(session_id: str):
+    """Confirmed Corpus hiện hành — input của Summary/RAG/Generator (FR-SCRN-07)."""
+    if session_store.get_session(session_id) is None:
+        raise HTTPException(status_code=404, detail="Session không tồn tại")
+    return session_store.get_corpus(session_id)
+
+
+# ---------------------------------------------------------------------------
+# Paper Summarization (W3 — PRD v1.1 mục 11.2): 5 trường + provenance.
+# ---------------------------------------------------------------------------
+
+from src.models.schemas import (  # noqa: E402
+    SummaryRequest,
+    SummaryResponse,
+    SummaryUpdateRequest,
+)
+from src.services import summary_service  # noqa: E402
+
+
+@router.post("/summary", response_model=SummaryResponse)
+async def summarize(request: SummaryRequest):
+    """Tạo summary 5 trường cho một paper trong corpus (FR-SUMM-01..08).
+
+    Paper metadata-only → 4 trường M/D/R/F là not_mentioned, không gọi LLM.
+    Lỗi kỹ thuật sau retry → summary_status failed/timeout, không có fields giả.
+    """
+    if session_store.get_session(request.session_id) is None:
+        raise HTTPException(status_code=404, detail="Session không tồn tại")
+    paper = session_store.get_paper(request.session_id, request.paper_id)
+    if paper is None:
+        raise HTTPException(status_code=404, detail="Paper không trong session")
+
+    summary = await summary_service.summarize_paper(paper)
+    session_store.save_summary(request.session_id, request.paper_id, summary)
+    stored = session_store.get_summary(request.session_id, request.paper_id)
+    assert stored is not None
+    return SummaryResponse(
+        session_id=request.session_id,
+        **{"paper_id": request.paper_id, **stored},
+    )
+
+
+@router.get("/sessions/{session_id}/summaries", response_model=list)
+async def get_summaries(session_id: str):
+    """Toàn bộ summary của session — restore sau reload (FR-SES-04)."""
+    if session_store.get_session(session_id) is None:
+        raise HTTPException(status_code=404, detail="Session không tồn tại")
+    return session_store.list_summaries(session_id)
+
+
+@router.patch("/sessions/{session_id}/papers/{paper_id}/summary")
+async def edit_summary_field(session_id: str, paper_id: str, request: SummaryUpdateRequest):
+    """Sửa một trường summary — user_edited flag, giữ provenance gốc (FR-SUMM-05)."""
+    if session_store.get_session(session_id) is None:
+        raise HTTPException(status_code=404, detail="Session không tồn tại")
+    updated = session_store.update_summary_field(session_id, paper_id, request.field_name, request.value)
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Summary hoặc trường không tồn tại")
+    return {"session_id": session_id, "paper_id": paper_id, **updated}
+
+
+# ---------------------------------------------------------------------------
+# Evidence-based RAG (W4 — PRD v1.1 mục 11.2): hỏi đáp trên corpus hiện hành.
+# ---------------------------------------------------------------------------
+
+from src.models.schemas import (  # noqa: E402
+    RAGRequest,
+    RAGResponse,
+)
+from src.services import rag_service  # noqa: E402
+
+
+@router.post("/rag", response_model=RAGResponse)
+async def rag_ask(request: RAGRequest):
+    """Hỏi đáp trên Confirmed Corpus hiện hành (FR-RAG-01..08).
+
+    - Evidence Chunk dựng từ abstract của corpus; retrieval top-k cố định.
+    - Không chunk khớp → no_matching_evidence + citations rỗng (FR-RAG-06/08).
+    - Lịch sử RAG Exchange lưu corpus_version + evidence snapshot (FR-RAG-12).
+    """
+    session = session_store.get_session(request.session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session không tồn tại")
+
+    corpus = session_store.get_corpus(request.session_id)
+    if not corpus:
+        return RAGResponse(
+            session_id=request.session_id,
+            question=request.question,
+            answer_status="no_matching_evidence",
+            answer="Confirmed Corpus rỗng — screening và review paper trước khi hỏi (FR-RAG-01).",
+            citations=[],
+            corpus_version=session["corpus_version"],
+        )
+
+    chunks_with_paper = []
+    for paper in corpus:
+        chunks_with_paper.extend((c, paper) for c in rag_service.build_chunks(paper, request.session_id))
+
+    result = await rag_service.answer_question(
+        request.question,
+        session["research_question"],
+        chunks_with_paper,
+        session["corpus_version"],
+    )
+    saved = session_store.save_rag_exchange(request.session_id, request.question, result)
+    return RAGResponse(**saved)
+
+
+@router.get("/sessions/{session_id}/rag", response_model=list)
+async def get_rag_history(session_id: str):
+    """Lịch sử RAG — giữ nguyên nội dung tại thời điểm hỏi (FR-RAG-12)."""
+    if session_store.get_session(session_id) is None:
+        raise HTTPException(status_code=404, detail="Session không tồn tại")
+    return session_store.list_rag_exchanges(session_id)
+
+
+# ---------------------------------------------------------------------------
+# Literature Review Generator (W4): Matrix + Synthesis Draft.
+# ---------------------------------------------------------------------------
+
+from src.models.schemas import (  # noqa: E402
+    DraftStatusRequest,
+    GenerateRequest,
+    GenerateResponse,
+)
+from src.services import generator_service  # noqa: E402
+
+
+@router.post("/generate", response_model=GenerateResponse)
+async def generate(request: GenerateRequest):
+    """Tạo Comparison Matrix + Synthesis Draft từ corpus (FR-GEN-01..04).
+
+    - Matrix deterministic từ Summary; paper chưa có Summary -> Not available.
+    - Synthesis qua LLM; claims resolve về paper trong corpus; khong resolve ->
+      support_status unsupported (FR-GEN-03/06) — approval se chan (W5).
+    - Khong phu thuoc RAG history (FR-GEN-02).
+    """
+    session = session_store.get_session(request.session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session không tồn tại")
+    corpus = session_store.get_corpus(request.session_id)
+    if not corpus:
+        raise HTTPException(
+            status_code=422,
+            detail="Confirmed Corpus rỗng — screening + review trước khi Generate (FR-GEN-02)",
+        )
+
+    summaries = {s["paper_id"]: s for s in session_store.list_summaries(request.session_id)}
+    result = await generator_service.generate_draft(session["research_question"], corpus, summaries)
+    saved = session_store.save_draft(
+        request.session_id,
+        {
+            "content": result.get("draft_markdown", ""),
+            "matrix": result.get("matrix", []),
+            "claims": result.get("claims", []),
+            "unsupported_count": result.get("unsupported_count", 0),
+            "corpus_version": session["corpus_version"],
+        },
+    )
+    return GenerateResponse(
+        generation_status=result["generation_status"],
+        generation_error=result.get("generation_error", ""),
+        **saved,
+    )
+
+
+@router.get("/sessions/{session_id}/draft")
+async def get_draft(session_id: str):
+    """Draft mới nhất của session — restore (FR-SES-04)."""
+    if session_store.get_session(session_id) is None:
+        raise HTTPException(status_code=404, detail="Session không tồn tại")
+    draft = session_store.get_latest_draft(session_id)
+    if draft is None:
+        return {"session_id": session_id, "generation_status": "no_draft"}
+    return draft
+
+
+@router.post("/sessions/{session_id}/draft/status")
+async def update_draft_status(session_id: str, request: DraftStatusRequest):
+    """Đổi trạng thái draft (Approve ở trang Review — W5 thêm snapshot/hash)."""
+    if session_store.get_session(session_id) is None:
+        raise HTTPException(status_code=404, detail="Session không tồn tại")
+    draft = session_store.set_draft_status(session_id, request.draft_id, request.status)
+    if draft is None:
+        raise HTTPException(status_code=404, detail="Draft không tồn tại")
+    return draft

@@ -49,6 +49,69 @@ CREATE TABLE IF NOT EXISTS paper (
 );
 
 CREATE INDEX IF NOT EXISTS idx_paper_session_doi ON paper (session_id, doi);
+
+CREATE TABLE IF NOT EXISTS paper_summary (
+    summary_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL,
+    paper_id TEXT NOT NULL,
+    summary_status TEXT NOT NULL CHECK (summary_status IN
+        ('pending', 'processing', 'completed', 'failed', 'timeout')),
+    fields_json TEXT NOT NULL DEFAULT '{}',
+    source_type TEXT NOT NULL DEFAULT '',
+    user_edited INTEGER NOT NULL DEFAULT 0,
+    truncated INTEGER NOT NULL DEFAULT 0,
+    generated_at TEXT NOT NULL,
+    FOREIGN KEY (session_id, paper_id) REFERENCES paper (session_id, paper_id),
+    UNIQUE (session_id, paper_id)
+);
+
+CREATE TABLE IF NOT EXISTS review_draft (
+    draft_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL,
+    content TEXT NOT NULL,
+    matrix_json TEXT NOT NULL DEFAULT '[]',
+    claims_json TEXT NOT NULL DEFAULT '[]',
+    unsupported_count INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'Pending Review' CHECK (status IN
+        ('Draft', 'Pending Review', 'Approved', 'Stale')),
+    corpus_version INTEGER NOT NULL,
+    content_hash TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS rag_exchange (
+    exchange_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL,
+    question TEXT NOT NULL,
+    answer TEXT NOT NULL,
+    answer_status TEXT NOT NULL CHECK (answer_status IN
+        ('sufficient_evidence', 'insufficient_evidence', 'no_matching_evidence', 'failed')),
+    citations_json TEXT NOT NULL DEFAULT '[]',
+    corpus_version INTEGER NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS screening_result (
+    screening_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL,
+    paper_id TEXT NOT NULL,
+    classification_status TEXT NOT NULL CHECK (classification_status IN
+        ('pending', 'processing', 'completed', 'failed', 'timeout')),
+    classification_error TEXT NOT NULL DEFAULT '',
+    ai_classification TEXT CHECK (ai_classification IN
+        ('Relevant', 'Partially Relevant', 'Not Relevant', 'Insufficient Evidence')),
+    reason TEXT NOT NULL DEFAULT '',
+    evidence_json TEXT NOT NULL DEFAULT '{}',
+    review_status TEXT NOT NULL DEFAULT 'Pending Review' CHECK (review_status IN
+        ('Pending Review', 'Accepted', 'Rejected', 'Overridden')),
+    final_classification TEXT,
+    override_note TEXT NOT NULL DEFAULT '',
+    classified_at TEXT,
+    reviewed_at TEXT,
+    FOREIGN KEY (session_id, paper_id) REFERENCES paper (session_id, paper_id),
+    UNIQUE (session_id, paper_id)
+);
 """
 
 _LOCAL = threading.local()
@@ -233,3 +296,366 @@ def get_paper(session_id: str, paper_id: str) -> PaperOut | None:
         .fetchone()
     )
     return _row_to_paper(row) if row else None
+
+
+# ---------------------------------------------------------------------------
+# Screening (W2) — classification (AI) + review (user) + Confirmed Corpus.
+# ---------------------------------------------------------------------------
+
+_CORPUS_LABELS = ("Relevant", "Partially Relevant")
+
+
+def save_screening_result(
+    session_id: str,
+    paper_id: str,
+    classification_status: str,
+    classification_error: str = "",
+    ai_classification: str | None = None,
+    reason: str = "",
+    evidence: dict | None = None,
+) -> None:
+    """Lưu kết quả phân loại AI — classification_status tách khỏi review_status."""
+    _conn().execute(
+        "INSERT INTO screening_result (session_id, paper_id, classification_status, "
+        "classification_error, ai_classification, reason, evidence_json, classified_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+        "ON CONFLICT (session_id, paper_id) DO UPDATE SET "
+        "classification_status = excluded.classification_status, "
+        "classification_error = excluded.classification_error, "
+        "ai_classification = excluded.ai_classification, "
+        "reason = excluded.reason, evidence_json = excluded.evidence_json, "
+        "classified_at = excluded.classified_at",
+        (
+            session_id,
+            paper_id,
+            classification_status,
+            classification_error,
+            ai_classification,
+            reason,
+            __import__("json").dumps(evidence or {}, ensure_ascii=False),
+            _now(),
+        ),
+    )
+    _conn().commit()
+
+
+def get_screening(session_id: str, paper_id: str) -> dict | None:
+    row = (
+        _conn()
+        .execute(
+            "SELECT * FROM screening_result WHERE session_id = ? AND paper_id = ?",
+            (session_id, paper_id),
+        )
+        .fetchone()
+    )
+    return _screening_row(row) if row else None
+
+
+def list_screening(session_id: str) -> list[dict]:
+    rows = (
+        _conn()
+        .execute(
+            "SELECT * FROM screening_result WHERE session_id = ? ORDER BY screening_id",
+            (session_id,),
+        )
+        .fetchall()
+    )
+    return [_screening_row(r) for r in rows]
+
+
+def _screening_row(row) -> dict:
+    return {
+        "paper_id": row["paper_id"],
+        "classification_status": row["classification_status"],
+        "classification_error": row["classification_error"],
+        "ai_classification": row["ai_classification"],
+        "reason": row["reason"],
+        "evidence": json.loads(row["evidence_json"] or "{}"),
+        "review_status": row["review_status"],
+        "final_classification": row["final_classification"],
+        "override_note": row["override_note"],
+    }
+
+
+def _membership(session_id: str, paper_id: str) -> bool:
+    """FR-SCRN-07: corpus membership = Accepted/Overridden + final ∈ Relevant/Partially."""
+    row = (
+        _conn()
+        .execute(
+            "SELECT review_status, final_classification FROM screening_result WHERE session_id = ? AND paper_id = ?",
+            (session_id, paper_id),
+        )
+        .fetchone()
+    )
+    if row is None:
+        return False
+    return row["review_status"] in ("Accepted", "Overridden") and row["final_classification"] in _CORPUS_LABELS
+
+
+def _corpus_ids(session_id: str) -> set[str]:
+    rows = _conn().execute("SELECT paper_id FROM screening_result WHERE session_id = ?", (session_id,)).fetchall()
+    return {r["paper_id"] for r in rows if _membership(session_id, r["paper_id"])}
+
+
+def apply_review_decision(
+    session_id: str,
+    paper_id: str,
+    review_status: str,
+    final_classification: str | None,
+    override_note: str = "",
+) -> int:
+    """Áp quyết định Accept/Reject/Override của người dùng (FR-SCRN-04).
+
+    ai_classification KHÔNG bị ghi đè. corpus_version chỉ tăng khi membership
+    thực sự thay đổi (FR-SES-07). Trả về corpus_version sau khi áp.
+    """
+    before = _corpus_ids(session_id)
+    _conn().execute(
+        "UPDATE screening_result SET review_status = ?, final_classification = ?, "
+        "override_note = ?, reviewed_at = ? WHERE session_id = ? AND paper_id = ?",
+        (review_status, final_classification, override_note, _now(), session_id, paper_id),
+    )
+    _conn().commit()
+    after = _corpus_ids(session_id)
+    if before != after:
+        _conn().execute(
+            "UPDATE research_session SET corpus_version = corpus_version + 1, updated_at = ? WHERE session_id = ?",
+            (_now(), session_id),
+        )
+        _conn().commit()
+    return get_session(session_id)["corpus_version"]
+
+
+def get_corpus(session_id: str) -> list[PaperOut]:
+    """Confirmed Corpus hiện hành — danh sách paper (FR-SCRN-07)."""
+    ids = _corpus_ids(session_id)
+    if not ids:
+        return []
+    placeholders = ",".join("?" for _ in ids)
+    rows = (
+        _conn()
+        .execute(
+            f"SELECT * FROM paper WHERE session_id = ? AND paper_id IN ({placeholders})",
+            (session_id, *ids),
+        )
+        .fetchall()
+    )
+    return [_row_to_paper(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# Paper Summary (W3) — 5 trường + provenance từng trường.
+# ---------------------------------------------------------------------------
+
+
+def save_summary(session_id: str, paper_id: str, summary: dict) -> None:
+    """Lưu summary — mỗi trường có value/not_mentioned/provenance độc lập.
+
+    LLM sinh lại summary không xóa cờ user_edited của trường người dùng đã
+    sửa — giá trị của trường đó cũng không bị ghi đè âm thầm (FR-SES-05).
+    """
+    conn = _conn()
+    existing = get_summary(session_id, paper_id)
+    if existing and existing["user_edited"]:
+        # giữ nguyên bản người dùng đã sửa; chỉ cập nhật trạng thái thực thi
+        conn.execute(
+            "UPDATE paper_summary SET summary_status = ?, generated_at = ? WHERE session_id = ? AND paper_id = ?",
+            (summary["summary_status"], _now(), session_id, paper_id),
+        )
+        conn.commit()
+        return
+    conn.execute(
+        "INSERT INTO paper_summary (session_id, paper_id, summary_status, "
+        "fields_json, source_type, user_edited, truncated, generated_at) "
+        "VALUES (?, ?, ?, ?, ?, 0, ?, ?) "
+        "ON CONFLICT (session_id, paper_id) DO UPDATE SET "
+        "summary_status = excluded.summary_status, fields_json = excluded.fields_json, "
+        "source_type = excluded.source_type, truncated = excluded.truncated, "
+        "generated_at = excluded.generated_at",
+        (
+            session_id,
+            paper_id,
+            summary["summary_status"],
+            json.dumps(summary.get("fields", {}), ensure_ascii=False),
+            summary.get("source_type", ""),
+            summary.get("truncated", False),
+            _now(),
+        ),
+    )
+    conn.commit()
+
+
+def get_summary(session_id: str, paper_id: str) -> dict | None:
+    row = (
+        _conn()
+        .execute(
+            "SELECT * FROM paper_summary WHERE session_id = ? AND paper_id = ?",
+            (session_id, paper_id),
+        )
+        .fetchone()
+    )
+    return _summary_row(row) if row else None
+
+
+def list_summaries(session_id: str) -> list[dict]:
+    rows = (
+        _conn()
+        .execute(
+            "SELECT * FROM paper_summary WHERE session_id = ? ORDER BY generated_at",
+            (session_id,),
+        )
+        .fetchall()
+    )
+    return [_summary_row(r) for r in rows]
+
+
+def _summary_row(row) -> dict:
+    return {
+        "paper_id": row["paper_id"],
+        "summary_status": row["summary_status"],
+        "fields": json.loads(row["fields_json"] or "{}"),
+        "source_type": row["source_type"],
+        "user_edited": bool(row["user_edited"]),
+        "truncated": bool(row["truncated"]),
+    }
+
+
+def update_summary_field(session_id: str, paper_id: str, field_name: str, value: str) -> dict | None:
+    """Sửa một trường — đánh dấu user_edited, giữ provenance gốc (FR-SUMM-05)."""
+    summary = get_summary(session_id, paper_id)
+    if summary is None or field_name not in summary["fields"]:
+        return None
+    conn = _conn()
+    summary["fields"][field_name]["value"] = value
+    summary["fields"][field_name]["user_edited"] = True
+    summary["user_edited"] = True
+    conn.execute(
+        "UPDATE paper_summary SET fields_json = ?, user_edited = 1 WHERE session_id = ? AND paper_id = ?",
+        (json.dumps(summary["fields"], ensure_ascii=False), session_id, paper_id),
+    )
+    conn.commit()
+    return summary
+
+
+# ---------------------------------------------------------------------------
+# RAG Exchange (W4) — lịch sử giữ nguyên tại thời điểm hỏi (FR-RAG-12).
+# ---------------------------------------------------------------------------
+
+
+def save_rag_exchange(session_id: str, question: str, result: dict) -> dict:
+    conn = _conn()
+    now = _now()
+    conn.execute(
+        "INSERT INTO rag_exchange (session_id, question, answer, answer_status, "
+        "citations_json, corpus_version, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (
+            session_id,
+            question,
+            result["answer"],
+            result["answer_status"],
+            json.dumps(result.get("citations", []), ensure_ascii=False),
+            result["corpus_version"],
+            now,
+        ),
+    )
+    conn.commit()
+    return {
+        "exchange_id": conn.execute("SELECT last_insert_rowid()").fetchone()[0],
+        "session_id": session_id,
+        "question": question,
+        "answer": result["answer"],
+        "answer_status": result["answer_status"],
+        "citations": result.get("citations", []),
+        "corpus_version": result["corpus_version"],
+        "created_at": now,
+    }
+
+
+def list_rag_exchanges(session_id: str) -> list[dict]:
+    rows = (
+        _conn()
+        .execute(
+            "SELECT * FROM rag_exchange WHERE session_id = ? ORDER BY exchange_id DESC LIMIT 50",
+            (session_id,),
+        )
+        .fetchall()
+    )
+    return [
+        {
+            "exchange_id": r["exchange_id"],
+            "question": r["question"],
+            "answer": r["answer"],
+            "answer_status": r["answer_status"],
+            "citations": json.loads(r["citations_json"] or "[]"),
+            "corpus_version": r["corpus_version"],
+            "created_at": r["created_at"],
+        }
+        for r in rows
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Review Draft (W4) — Synthesis + Matrix + claims; approval ở trang Review.
+# ---------------------------------------------------------------------------
+
+
+def save_draft(session_id: str, draft: dict) -> dict:
+    conn = _conn()
+    now = _now()
+    import hashlib
+
+    content_hash = hashlib.sha256(draft["content"].encode()).hexdigest()
+    conn.execute(
+        "INSERT INTO review_draft (session_id, content, matrix_json, claims_json, "
+        "unsupported_count, status, corpus_version, content_hash, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?, 'Pending Review', ?, ?, ?, ?)",
+        (
+            session_id,
+            draft["content"],
+            json.dumps(draft.get("matrix", []), ensure_ascii=False),
+            json.dumps(draft.get("claims", []), ensure_ascii=False),
+            draft.get("unsupported_count", 0),
+            draft["corpus_version"],
+            content_hash,
+            now,
+            now,
+        ),
+    )
+    conn.commit()
+    return get_latest_draft(session_id)
+
+
+def get_latest_draft(session_id: str) -> dict | None:
+    row = (
+        _conn()
+        .execute(
+            "SELECT * FROM review_draft WHERE session_id = ? ORDER BY draft_id DESC LIMIT 1",
+            (session_id,),
+        )
+        .fetchone()
+    )
+    return _draft_row(row) if row else None
+
+
+def _draft_row(row) -> dict:
+    return {
+        "draft_id": row["draft_id"],
+        "session_id": row["session_id"],
+        "content": row["content"],
+        "matrix": json.loads(row["matrix_json"] or "[]"),
+        "claims": json.loads(row["claims_json"] or "[]"),
+        "unsupported_count": row["unsupported_count"],
+        "status": row["status"],
+        "corpus_version": row["corpus_version"],
+        "content_hash": row["content_hash"],
+        "created_at": row["created_at"],
+    }
+
+
+def set_draft_status(session_id: str, draft_id: int, status: str) -> dict | None:
+    _conn().execute(
+        "UPDATE review_draft SET status = ?, updated_at = ? WHERE session_id = ? AND draft_id = ?",
+        (status, _now(), session_id, draft_id),
+    )
+    _conn().commit()
+    return get_latest_draft(session_id)

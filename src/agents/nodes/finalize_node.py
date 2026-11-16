@@ -14,7 +14,7 @@ from collections.abc import Awaitable, Callable
 from src.agents.guardrails import guardrails
 from src.agents.state import AgentState
 from src.models.schemas import FinalAnswer
-from src.services.llm import get_llm
+from src.services.llm import structured_llm
 
 logger = logging.getLogger("ai20k.finalize")
 
@@ -35,11 +35,12 @@ Chỉ dùng dữ kiện trong tool trace. Thiếu thì nói thiếu. confidence 
 
 async def llm_generate(state: AgentState, partial: bool = False) -> FinalAnswer:
     """Default generate_fn — model mạnh (generate tier) vì đây là đầu ra chính."""
-    llm = get_llm("generate").with_structured_output(FinalAnswer)
+    llm = structured_llm("generate", FinalAnswer)
     trace = "\n".join(f"- {t['tool']}({t['args']}) -> {t['output']}" for t in state.get("tool_trace", []))
     partial_note = (
         "\nLƯU Ý: hết vòng lặp tối đa mà chưa đủ dữ kiện — trả lời phần có được và ghi rõ phần thiếu."
-        if partial else ""
+        if partial
+        else ""
     )
     prompt = _GENERATE_PROMPT.format(
         query=state.get("query", ""),
@@ -56,10 +57,7 @@ def _make_finalize(generate_fn: GenerateFn | None, partial: bool):
         # Nhánh từ chối do guardrail input — không gọi LLM, trả lời canned tường minh.
         if state.get("refusal_reason"):
             refusal = FinalAnswer(
-                answer=(
-                    "Tôi không thể xử lý yêu cầu này: "
-                    f"{state['refusal_reason']}"
-                ),
+                answer=(f"Tôi không thể xử lý yêu cầu này: {state['refusal_reason']}"),
                 confidence=1.0,
                 used_tools=[],
             )

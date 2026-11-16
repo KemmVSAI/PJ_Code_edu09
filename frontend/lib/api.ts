@@ -75,6 +75,47 @@ export interface ToolResponse {
   data?: unknown;
 }
 
+// ---------------------------------------------------------------------------
+// Screening (W2) — khớp src/models/schemas.py
+// ---------------------------------------------------------------------------
+
+export type ScreeningLabel = "Relevant" | "Partially Relevant" | "Not Relevant" | "Insufficient Evidence";
+export type ReviewStatus = "Pending Review" | "Accepted" | "Rejected" | "Overridden";
+
+export interface ScreeningEvidence {
+  source_type: "metadata_only" | "abstract";
+  source_reference: string;
+  snippet: string;
+}
+
+export interface ScreeningItem {
+  paper_id: string;
+  title: string;
+  classification_status: "pending" | "processing" | "completed" | "failed" | "timeout";
+  classification_error: string;
+  ai_classification: ScreeningLabel | null;
+  reason: string;
+  evidence: ScreeningEvidence | null;
+  review_status: ReviewStatus;
+  final_classification: ScreeningLabel | null;
+  override_note: string;
+}
+
+export interface ScreenResponse {
+  session_id: string;
+  results: ScreeningItem[];
+  summary: { labels: Record<string, number>; technical_failures: number; total: number };
+}
+
+export interface ReviewDecisionResponse {
+  session_id: string;
+  paper_id: string;
+  review_status: ReviewStatus;
+  final_classification: ScreeningLabel | null;
+  corpus_version: number;
+  in_corpus: boolean;
+}
+
 async function handle<T>(resp: Response): Promise<T> {
   if (!resp.ok) {
     const body = (await resp.json().catch(() => ({}))) as { detail?: string };
@@ -165,4 +206,165 @@ export async function runTool(request: ToolRequest): Promise<ToolResponse> {
   } catch (err) {
     return { status: "error", message: err instanceof Error ? err.message : "Lỗi không xác định" };
   }
+}
+
+// ---------------------------------------------------------------------------
+// Screening API (W2) — endpoint thật, không qua prompt agent
+// ---------------------------------------------------------------------------
+
+export async function screenPapers(sessionId: string, paperIds?: string[]): Promise<ScreenResponse> {
+  const resp = await fetch(`${API_BASE}/api/v1/screen`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ session_id: sessionId, ...(paperIds ? { paper_ids: paperIds } : {}) }),
+  });
+  return handle<ScreenResponse>(resp);
+}
+
+export async function getScreeningResults(sessionId: string): Promise<ScreeningItem[]> {
+  const resp = await fetch(`${API_BASE}/api/v1/sessions/${sessionId}/screening`);
+  return handle<ScreeningItem[]>(resp);
+}
+
+export async function submitReviewDecision(
+  sessionId: string,
+  paperId: string,
+  decision: "accept" | "reject" | "override",
+  finalClassification?: ScreeningLabel,
+  overrideNote?: string,
+): Promise<ReviewDecisionResponse> {
+  const resp = await fetch(`${API_BASE}/api/v1/screen/review`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      session_id: sessionId,
+      paper_id: paperId,
+      decision,
+      ...(finalClassification ? { final_classification: finalClassification } : {}),
+      ...(overrideNote ? { override_note: overrideNote } : {}),
+    }),
+  });
+  return handle<ReviewDecisionResponse>(resp);
+}
+
+export async function getCorpus(sessionId: string): Promise<Paper[]> {
+  const resp = await fetch(`${API_BASE}/api/v1/sessions/${sessionId}/corpus`);
+  return handle<Paper[]>(resp);
+}
+
+// ---------------------------------------------------------------------------
+// Summary / RAG / Generator (W3–W4) — endpoint thật, khớp schemas.py
+// ---------------------------------------------------------------------------
+
+export interface SummaryField {
+  value: string;
+  not_mentioned: boolean;
+  provenance: string;
+  user_edited?: boolean;
+}
+
+export interface SummaryInfo {
+  paper_id: string;
+  summary_status: "pending" | "processing" | "completed" | "failed" | "timeout";
+  fields: Record<string, SummaryField>;
+  source_type: string;
+  user_edited: boolean;
+  truncated: boolean;
+}
+
+export async function summarizePaper(sessionId: string, paperId: string): Promise<SummaryInfo> {
+  const resp = await fetch(`${API_BASE}/api/v1/summary`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ session_id: sessionId, paper_id: paperId }),
+  });
+  const data = await handle<SummaryInfo & { summary_status: string }>(resp);
+  return data;
+}
+
+export async function getSummaries(sessionId: string): Promise<SummaryInfo[]> {
+  const resp = await fetch(`${API_BASE}/api/v1/sessions/${sessionId}/summaries`);
+  return handle<SummaryInfo[]>(resp);
+}
+
+export async function editSummaryField(
+  sessionId: string,
+  paperId: string,
+  fieldName: string,
+  value: string,
+): Promise<SummaryInfo> {
+  const resp = await fetch(`${API_BASE}/api/v1/sessions/${sessionId}/papers/${paperId}/summary`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ field_name: fieldName, value }),
+  });
+  return handle<SummaryInfo>(resp);
+}
+
+export type AnswerStatus =
+  | "sufficient_evidence"
+  | "insufficient_evidence"
+  | "no_matching_evidence"
+  | "failed";
+
+export interface RAGCitation {
+  paper_id: string;
+  chunk_id: string;
+  snippet: string;
+  source_type: string;
+  title: string;
+}
+
+export interface RAGResult {
+  session_id: string;
+  question: string;
+  answer_status: AnswerStatus;
+  answer: string;
+  citations: RAGCitation[];
+  corpus_version: number;
+}
+
+export async function askRAG(sessionId: string, question: string): Promise<RAGResult> {
+  const resp = await fetch(`${API_BASE}/api/v1/rag`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ session_id: sessionId, question }),
+  });
+  return handle<RAGResult>(resp);
+}
+
+export interface GeneratorClaim {
+  claim_text: string;
+  claim_type: "factual" | "synthesis" | "interpretation";
+  paper_ids: string[];
+  evidence_snippets: string[];
+  support_status: "supported" | "partially_supported" | "unsupported";
+}
+
+export interface DraftInfo {
+  session_id?: string;
+  generation_status?: "completed" | "failed" | "timeout" | "no_draft";
+  generation_error?: string;
+  draft_id?: number;
+  content: string;
+  matrix: Record<string, unknown>[];
+  claims: GeneratorClaim[];
+  unsupported_count: number;
+  status: string;
+  corpus_version: number;
+  content_hash: string;
+}
+
+export async function generateDraft(sessionId: string): Promise<DraftInfo> {
+  const resp = await fetch(`${API_BASE}/api/v1/generate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ session_id: sessionId }),
+  });
+  return handle<DraftInfo>(resp);
+}
+
+export async function getDraft(sessionId: string): Promise<DraftInfo> {
+  const resp = await fetch(`${API_BASE}/api/v1/sessions/${sessionId}/draft`);
+  return handle<DraftInfo>(resp);
 }

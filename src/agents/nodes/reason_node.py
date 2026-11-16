@@ -15,7 +15,7 @@ from src.agents.guardrails import guardrails
 from src.agents.state import AgentState
 from src.agents.tools import TOOL_REGISTRY
 from src.models.schemas import AgentDecision
-from src.services.llm import get_llm
+from src.services.llm import structured_llm
 
 logger = logging.getLogger("ai20k.reason")
 
@@ -42,7 +42,7 @@ KHÔNG bịa tên tool ngoài danh sách. KHÔNG bịa dữ kiện không có tr
 
 async def llm_reason(state: AgentState) -> AgentDecision:
     """Default reason_fn — dùng model rẻ (classify tier) vì việc này là routing."""
-    llm = get_llm("classify").with_structured_output(AgentDecision)
+    llm = structured_llm("classify", AgentDecision)
     trace = "\n".join(f"- {t['tool']}({t['args']}) -> {t['output']}" for t in state.get("tool_trace", []))
     prompt = _REASON_PROMPT.format(
         query=state.get("query", ""),
@@ -66,10 +66,11 @@ def make_reason_node(reason_fn: ReasonFn | None = None):
         if decision.action == "tool" and decision.tool_name not in TOOL_REGISTRY:
             logger.error("FAILED reason — tool bịa %r ngoài registry", decision.tool_name)
             raise ValueError(
-                f"AgentDecision chọn tool không tồn tại: {decision.tool_name!r}. "
-                f"Tool hợp lệ: {sorted(TOOL_REGISTRY)}"
+                f"AgentDecision chọn tool không tồn tại: {decision.tool_name!r}. Tool hợp lệ: {sorted(TOOL_REGISTRY)}"
             )
-        logger.info("reason iter=%d action=%s tool=%s", state.get("iteration_count", 0), decision.action, decision.tool_name)
+        logger.info(
+            "reason iter=%d action=%s tool=%s", state.get("iteration_count", 0), decision.action, decision.tool_name
+        )
         return {"last_decision": decision.model_dump(), "stage": "reason"}
 
     return reason_node

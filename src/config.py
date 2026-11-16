@@ -32,6 +32,11 @@ class Settings(BaseSettings):
     model_generate: str = "gpt-4o"  # strong: sinh câu trả lời cuối
     model_judge: str = "gpt-4o-mini"  # judge: khác model_generate mặc định
     llm_temperature: float = Field(default=0.7, ge=0.0, le=2.0)
+    # max_tokens cho mỗi lần gọi LLM — OpenRouter free-tier credit giới hạn
+    # tổng tokens khả dụng; yêu cầu 16384 mặc định của ChatOpenAI sẽ bị từ chối
+    # (402 "requires more credits, or fewer max_tokens"). 2048 đủ cho classify
+    # (JSON 1 object) và generation MVP; đổi bằng OPENAI_MAX_TOKENS.
+    llm_max_tokens: int = Field(default=2048, ge=64, le=32768)
 
     # Agent loop — escape hatch chống loop vô hạn (bài học team 011:
     # luôn phải có một đường tới END dù LLM cứ đòi gọi tool mãi)

@@ -147,3 +147,165 @@ class AddPapersResponse(BaseModel):
         default_factory=list, description="ID bị chặn vì trùng OpenAlex ID/DOI trong session (FR-SRCH-04)"
     )
     working_set: list[PaperOut] = Field(default_factory=list, description="Working Set hiện tại của session")
+
+
+# ---------------------------------------------------------------------------
+# Smart Screening (W2) — PRD v1.1 mục 11.2: AI classification + user review.
+# ---------------------------------------------------------------------------
+
+ScreeningLabel = Literal["Relevant", "Partially Relevant", "Not Relevant", "Insufficient Evidence"]
+ReviewStatus = Literal["Pending Review", "Accepted", "Rejected", "Overridden"]
+
+
+class ScreeningEvidenceOut(BaseModel):
+    source_type: Literal["metadata_only", "abstract"] = "abstract"
+    source_reference: str = ""
+    snippet: str = ""
+
+
+class ScreeningItemOut(BaseModel):
+    """Kết quả screening một paper — tách classification_status (thực thi) khỏi
+    review_status (nghiệp vụ); lỗi kỹ thuật không có nhãn nghiệp vụ (FR-SCRN-08)."""
+
+    paper_id: str
+    title: str
+    classification_status: Literal["pending", "processing", "completed", "failed", "timeout"]
+    classification_error: str = ""
+    ai_classification: ScreeningLabel | None = None
+    reason: str = ""
+    evidence: ScreeningEvidenceOut | None = None
+    review_status: ReviewStatus = "Pending Review"
+    final_classification: ScreeningLabel | None = None
+    override_note: str = ""
+
+
+class ScreenRequest(BaseModel):
+    session_id: str = Field(..., description="Session hiện tại")
+    paper_ids: list[str] = Field(
+        default_factory=list,
+        description="Bỏ trống → screen toàn bộ Working Set chưa có kết quả; batch tối đa 10/lần",
+    )
+
+
+class ScreenResponse(BaseModel):
+    session_id: str
+    results: list[ScreeningItemOut]
+    summary: dict = Field(default_factory=dict, description="Đếm theo nhãn + số lỗi kỹ thuật")
+
+
+class ReviewDecisionRequest(BaseModel):
+    """Quyết định của người dùng — FR-SCRN-04: Accept / Reject / Override.
+
+    Accept chỉ áp dụng cho Relevant/Partially Relevant/Not Relevant;
+    Insufficient Evidence phải Reject hoặc Override (không Accept trực tiếp).
+    """
+
+    session_id: str
+    paper_id: str
+    decision: Literal["accept", "reject", "override"]
+    final_classification: ScreeningLabel | None = Field(
+        default=None, description="Bắt buộc khi decision=override; người dùng chọn trong 3 nhãn judged"
+    )
+    override_note: str = Field("", description="Lý do ghi đè, tùy chọn")
+
+
+class ReviewDecisionResponse(BaseModel):
+    session_id: str
+    paper_id: str
+    review_status: ReviewStatus
+    final_classification: ScreeningLabel | None = None
+    corpus_version: int
+    in_corpus: bool = Field(..., description="Paper có thuộc Confirmed Corpus hiện hành không (FR-SCRN-07)")
+
+
+# ---------------------------------------------------------------------------
+# Paper Summarization (W3) — schemas
+# ---------------------------------------------------------------------------
+
+SummaryStatus = Literal["pending", "processing", "completed", "failed", "timeout"]
+
+
+class SummaryFieldOut(BaseModel):
+    value: str = ""
+    not_mentioned: bool = True
+    provenance: str = ""
+    user_edited: bool = False
+
+
+class SummaryRequest(BaseModel):
+    session_id: str
+    paper_id: str
+
+
+class SummaryResponse(BaseModel):
+    session_id: str
+    paper_id: str
+    summary_status: SummaryStatus
+    fields: dict[str, SummaryFieldOut] = Field(default_factory=dict)
+    source_type: str = ""
+    user_edited: bool = False
+    truncated: bool = False
+
+
+class SummaryUpdateRequest(BaseModel):
+    field_name: str = Field(..., description="Một trong 5 trường theo FR-SUMM-01")
+    value: str = Field(..., min_length=1, max_length=5000)
+
+
+# ---------------------------------------------------------------------------
+# Evidence-based RAG (W4) — schemas
+# ---------------------------------------------------------------------------
+
+RAGAnswerStatus = Literal["sufficient_evidence", "insufficient_evidence", "no_matching_evidence", "failed"]
+
+
+class RAGCitation(BaseModel):
+    paper_id: str
+    chunk_id: str
+    snippet: str = Field(..., description="Trích nguyên văn từ abstract — evidence")
+    source_type: str = "abstract"
+    title: str = ""
+
+
+class RAGRequest(BaseModel):
+    session_id: str
+    question: str = Field(..., min_length=1, max_length=2000)
+
+
+class RAGResponse(BaseModel):
+    session_id: str
+    question: str
+    answer_status: RAGAnswerStatus
+    answer: str
+    citations: list[RAGCitation] = Field(default_factory=list)
+    corpus_version: int
+
+
+# ---------------------------------------------------------------------------
+# Literature Review Generator (W4) — schemas
+# ---------------------------------------------------------------------------
+
+GenerationStatus = Literal["completed", "failed", "timeout"]
+
+
+class GenerateRequest(BaseModel):
+    session_id: str
+
+
+class GenerateResponse(BaseModel):
+    session_id: str
+    generation_status: GenerationStatus | None = None
+    generation_error: str = ""
+    draft_id: int | None = None
+    content: str = ""
+    matrix: list[dict] = Field(default_factory=list)
+    claims: list[dict] = Field(default_factory=list)
+    unsupported_count: int = 0
+    status: str = "Pending Review"
+    corpus_version: int = 1
+    content_hash: str = ""
+
+
+class DraftStatusRequest(BaseModel):
+    draft_id: int
+    status: Literal["Draft", "Pending Review", "Approved", "Stale"]
