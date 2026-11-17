@@ -98,6 +98,7 @@ Swagger UI ở <http://localhost:8000/docs>. Hoặc dùng `make run`, `make test
 |---|---|
 | Long Nhat | Product / backend |
 | KemmVSAI | Agent / QA |
+| leduong04 | BE / adviser |
 | Các thành viên còn lại | Cập nhật sau buổi phân công chính thức |
 
 ## Cấu trúc thư mục
