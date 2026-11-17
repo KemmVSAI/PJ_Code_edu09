@@ -223,7 +223,11 @@ def get_session(session_id: str) -> dict | None:
 
 
 def list_sessions(limit: int = 20) -> list[dict]:
-    """Danh sách session + số liệu tiến độ cho Dashboard (một query gọn)."""
+    """Danh sách session + số liệu tiến độ cho Dashboard.
+
+    Phoenix-mentor review (PR #7): tránh N+1 query — 3 câu GROUP BY tổng
+    hợp thay vì 3×N query con trong vòng lặp (N = số session hiển thị).
+    """
     rows = (
         _conn()
         .execute(
@@ -233,23 +237,52 @@ def list_sessions(limit: int = 20) -> list[dict]:
         )
         .fetchall()
     )
+    sids = [r["session_id"] for r in rows]
+    if not sids:
+        return []
+
+    # 1 query đếm paper theo session
+    placeholders = ",".join("?" for _ in sids)
+    papers_by = {
+        r["session_id"]: r["n"]
+        for r in _conn()
+        .execute(
+            f"SELECT session_id, COUNT(*) AS n FROM paper "
+            f"WHERE session_id IN ({placeholders}) GROUP BY session_id",
+            sids,
+        )
+        .fetchall()
+    }
+    # 1 query đếm corpus membership theo session
+    corpus_by = {
+        r["session_id"]: r["n"]
+        for r in _conn()
+        .execute(
+            f"SELECT session_id, COUNT(*) AS n FROM screening_result "
+            f"WHERE session_id IN ({placeholders}) "
+            f"AND review_status IN ('Accepted', 'Overridden') "
+            f"AND final_classification IN ('Relevant', 'Partially Relevant') "
+            f"GROUP BY session_id",
+            sids,
+        )
+        .fetchall()
+    }
+    # 1 query draft status mới nhất theo session (max draft_id)
+    draft_by = {
+        r["session_id"]: r["status"]
+        for r in _conn()
+        .execute(
+            f"SELECT session_id, status FROM review_draft "
+            f"WHERE draft_id IN (SELECT MAX(draft_id) FROM review_draft "
+            f"WHERE session_id IN ({placeholders}) GROUP BY session_id)",
+            sids,
+        )
+        .fetchall()
+    }
+
     sessions = []
     for r in rows:
         sid = r["session_id"]
-        papers = _conn().execute(
-            "SELECT COUNT(*) FROM paper WHERE session_id = ?", (sid,)
-        ).fetchone()[0]
-        in_corpus = _conn().execute(
-            "SELECT COUNT(*) FROM screening_result WHERE session_id = ? "
-            "AND review_status IN ('Accepted', 'Overridden') "
-            "AND final_classification IN ('Relevant', 'Partially Relevant')",
-            (sid,),
-        ).fetchone()[0]
-        has_draft = _conn().execute(
-            "SELECT status FROM review_draft WHERE session_id = ? "
-            "ORDER BY draft_id DESC LIMIT 1",
-            (sid,),
-        ).fetchone()
         sessions.append(
             {
                 "session_id": sid,
@@ -257,9 +290,9 @@ def list_sessions(limit: int = 20) -> list[dict]:
                 "corpus_version": r["corpus_version"],
                 "created_at": r["created_at"],
                 "updated_at": r["updated_at"],
-                "papers_count": papers,
-                "corpus_count": in_corpus,
-                "draft_status": has_draft["status"] if has_draft else None,
+                "papers_count": papers_by.get(sid, 0),
+                "corpus_count": corpus_by.get(sid, 0),
+                "draft_status": draft_by.get(sid),
             }
         )
     return sessions
