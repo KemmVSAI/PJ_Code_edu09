@@ -178,6 +178,10 @@ def create_session(research_question: str, session_id: str) -> dict:
         "research_question": research_question,
         "corpus_version": 1,
         "created_at": now,
+        "updated_at": now,
+        "papers_count": 0,
+        "corpus_count": 0,
+        "draft_status": None,
     }
 
 
@@ -185,40 +189,80 @@ def get_session(session_id: str) -> dict | None:
     row = (
         _conn()
         .execute(
-            "SELECT session_id, research_question, corpus_version, created_at FROM research_session WHERE session_id = ?",
+            "SELECT session_id, research_question, corpus_version, created_at, updated_at FROM research_session WHERE session_id = ?",
             (session_id,),
         )
         .fetchone()
     )
     if row is None:
         return None
+    sid = row["session_id"]
+    papers = _conn().execute(
+        "SELECT COUNT(*) FROM paper WHERE session_id = ?", (sid,)
+    ).fetchone()[0]
+    in_corpus = _conn().execute(
+        "SELECT COUNT(*) FROM screening_result WHERE session_id = ? "
+        "AND review_status IN ('Accepted', 'Overridden') "
+        "AND final_classification IN ('Relevant', 'Partially Relevant')",
+        (sid,),
+    ).fetchone()[0]
+    has_draft = _conn().execute(
+        "SELECT status FROM review_draft WHERE session_id = ? ORDER BY draft_id DESC LIMIT 1",
+        (sid,),
+    ).fetchone()
     return {
-        "session_id": row["session_id"],
+        "session_id": sid,
         "research_question": row["research_question"],
         "corpus_version": row["corpus_version"],
         "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+        "papers_count": papers,
+        "corpus_count": in_corpus,
+        "draft_status": has_draft["status"] if has_draft else None,
     }
 
 
 def list_sessions(limit: int = 20) -> list[dict]:
+    """Danh sách session + số liệu tiến độ cho Dashboard (một query gọn)."""
     rows = (
         _conn()
         .execute(
-            "SELECT session_id, research_question, corpus_version, created_at "
-            "FROM research_session ORDER BY created_at DESC LIMIT ?",
+            "SELECT session_id, research_question, corpus_version, created_at, updated_at "
+            "FROM research_session ORDER BY updated_at DESC LIMIT ?",
             (limit,),
         )
         .fetchall()
     )
-    return [
-        {
-            "session_id": r["session_id"],
-            "research_question": r["research_question"],
-            "corpus_version": r["corpus_version"],
-            "created_at": r["created_at"],
-        }
-        for r in rows
-    ]
+    sessions = []
+    for r in rows:
+        sid = r["session_id"]
+        papers = _conn().execute(
+            "SELECT COUNT(*) FROM paper WHERE session_id = ?", (sid,)
+        ).fetchone()[0]
+        in_corpus = _conn().execute(
+            "SELECT COUNT(*) FROM screening_result WHERE session_id = ? "
+            "AND review_status IN ('Accepted', 'Overridden') "
+            "AND final_classification IN ('Relevant', 'Partially Relevant')",
+            (sid,),
+        ).fetchone()[0]
+        has_draft = _conn().execute(
+            "SELECT status FROM review_draft WHERE session_id = ? "
+            "ORDER BY draft_id DESC LIMIT 1",
+            (sid,),
+        ).fetchone()
+        sessions.append(
+            {
+                "session_id": sid,
+                "research_question": r["research_question"],
+                "corpus_version": r["corpus_version"],
+                "created_at": r["created_at"],
+                "updated_at": r["updated_at"],
+                "papers_count": papers,
+                "corpus_count": in_corpus,
+                "draft_status": has_draft["status"] if has_draft else None,
+            }
+        )
+    return sessions
 
 
 def _row_to_paper(row: sqlite3.Row) -> PaperOut:

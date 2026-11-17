@@ -17,6 +17,10 @@ export interface SessionInfo {
   research_question: string;
   corpus_version: number;
   created_at: string;
+  updated_at?: string | null;
+  papers_count?: number;
+  corpus_count?: number;
+  draft_status?: string | null;
 }
 
 export interface Paper {

@@ -101,6 +101,10 @@ class SessionOut(BaseModel):
     research_question: str = Field(..., description="Câu hỏi nghiên cứu")
     corpus_version: int = Field(default=1, description="Chỉ tăng khi membership Confirmed Corpus đổi")
     created_at: str = Field(..., description="ISO timestamp")
+    updated_at: str | None = Field(None, description="Lần cập nhật gần nhất")
+    papers_count: int = Field(0, description="Số paper trong Working Set")
+    corpus_count: int = Field(0, description="Số paper trong Confirmed Corpus")
+    draft_status: str | None = Field(None, description="Trạng thái draft mới nhất nếu có")
 
 
 class SearchRequest(BaseModel):
