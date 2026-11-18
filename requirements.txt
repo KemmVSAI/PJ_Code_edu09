@@ -27,5 +27,8 @@ pytest>=8.0.0
 pytest-asyncio>=0.24.0
 httpx>=0.28.0
 
+# DOCX export (W5 — Approval & Export)
+python-docx>=1.1.0
+
 # Eval
 pyyaml>=6.0

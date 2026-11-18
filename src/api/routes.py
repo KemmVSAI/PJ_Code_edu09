@@ -493,3 +493,121 @@ async def update_draft_status(session_id: str, request: DraftStatusRequest):
     if draft is None:
         raise HTTPException(status_code=404, detail="Draft không tồn tại")
     return draft
+
+# ---------------------------------------------------------------------------
+# Approval & Export (W5 — PRD v1.1 mục 11.2): snapshot bất biến + DOCX.
+# ---------------------------------------------------------------------------
+
+from src.models.schemas import (  # noqa: E402
+    ApproveRequest,
+    ApproveResponse,
+    ExportResponse,
+)
+from src.services import docx_service  # noqa: E402
+
+
+@router.post("/draft/approve", response_model=ApproveResponse)
+async def approve_draft(request: ApproveRequest):
+    """Phê duyệt draft — tạo Approval Snapshot bất biến (FR-APR-01/02).
+
+    Chặn approval nếu draft còn claim unsupported (FR-APR-09, FR-GEN-06/11).
+    Snapshot Active cũ của cùng draft bị invalidated khi approve lại.
+    """
+    if session_store.get_session(request.session_id) is None:
+        raise HTTPException(status_code=404, detail="Session không tồn tại")
+    result = session_store.create_approval_snapshot(request.session_id, request.draft_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Draft không tồn tại")
+    if result.get("error") == "unsupported_claims":
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Không thể duyệt: draft còn {result['unsupported_count']} claim "
+                "unsupported — phải chỉnh sửa/loại bỏ trước (FR-APR-09)"
+            ),
+        )
+    assert result is not None and "approval_id" in result
+    return ApproveResponse(**result)
+
+
+@router.get("/sessions/{session_id}/approval")
+async def get_approval(session_id: str, draft_id: int):
+    """Snapshot Active của draft (nếu có) — trang Review hiển thị trạng thái."""
+    if session_store.get_session(session_id) is None:
+        raise HTTPException(status_code=404, detail="Session không tồn tại")
+    approval = session_store.get_active_approval(session_id, draft_id)
+    if approval is None:
+        return {"session_id": session_id, "draft_id": draft_id, "status": "no_approval"}
+    return approval
+
+
+@router.get("/sessions/{session_id}/exports")
+async def get_exports(session_id: str, approval_id: int):
+    """Export Records của một approval — lịch sử file DOCX đã sinh (FR-APR-05)."""
+    if session_store.get_session(session_id) is None:
+        raise HTTPException(status_code=404, detail="Session không tồn tại")
+    return session_store.list_export_records(approval_id)
+
+
+@router.post("/export", response_model=ExportResponse)
+async def export_docx(request: ApproveRequest):
+    """Sinh file DOCX từ Approval Snapshot (FR-APR-04/05).
+
+    Điều kiện đồng thời (FR-APR-04): draft Approved; snapshot Active; canonical
+    hash khớp; corpus_version hiện hành khớp approved_corpus_version. Không gọi
+    LLM. Mỗi lần export tạo một Export Record với export_file_hash riêng.
+    """
+    session = session_store.get_session(request.session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session không tồn tại")
+    draft = session_store.get_draft_by_id(request.session_id, request.draft_id)
+    if draft is None:
+        raise HTTPException(status_code=404, detail="Draft không tồn tại")
+    approval = session_store.get_active_approval(request.session_id, request.draft_id)
+    if approval is None or approval["status"] != "Active":
+        raise HTTPException(status_code=422, detail="Chưa có Approval Snapshot hợp lệ — approve trước (FR-APR-04)")
+    if draft["status"] != "Approved":
+        raise HTTPException(status_code=422, detail="Draft không ở trạng thái Approved (FR-APR-04a)")
+    if draft["content_hash"] != approval["approved_content_hash"]:
+        raise HTTPException(status_code=422, detail="Draft đã thay đổi sau approval (FR-APR-04b)")
+    if session["corpus_version"] != approval["approved_corpus_version"]:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Corpus đã thay đổi (v{session['corpus_version']} ≠ v{approval['approved_corpus_version']}) — rebuild + approve lại (FR-APR-04c)",
+        )
+
+    # Sinh DOCX từ SNAPSHOT (không phải draft hiện hành) — FR-APR-05
+    corpus = session_store.get_corpus(request.session_id)
+    papers_by_id = {
+        p.paper_id: {"title": p.title, "authors": p.authors, "year": p.year, "venue": p.venue, "doi": p.doi}
+        for p in corpus
+    }
+    docx_bytes = docx_service.build_docx(
+        session["research_question"],
+        approval["approved_content_snapshot"],
+        papers_by_id,
+    )
+    file_name = docx_service.export_file_name(approval["approval_id"], request.session_id)
+    record = session_store.save_export_record(
+        approval["approval_id"], file_name, docx_service.file_hash(docx_bytes)
+    )
+    import base64
+
+    return ExportResponse(
+        **record,
+        file_base64=base64.b64encode(docx_bytes).decode(),
+        approved_content_hash=approval["approved_content_hash"],
+    )
+
+
+@router.post("/sessions/{session_id}/invalidate-approvals")
+async def invalidate_approvals(session_id: str):
+    """FR-APR-08: corpus_version đổi → invalidate snapshot Active không khớp.
+
+    Gọi tự động sau mỗi review decision; endpoint này để admin/debug.
+    """
+    session = session_store.get_session(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session không tồn tại")
+    count = session_store.invalidate_stale_approvals(session_id, session["corpus_version"])
+    return {"session_id": session_id, "invalidated": count}
