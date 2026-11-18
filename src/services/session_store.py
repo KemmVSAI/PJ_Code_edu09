@@ -651,7 +651,7 @@ def update_summary_field(session_id: str, paper_id: str, field_name: str, value:
 def save_rag_exchange(session_id: str, question: str, result: dict) -> dict:
     conn = _conn()
     now = _now()
-    conn.execute(
+    cur = conn.execute(
         "INSERT INTO rag_exchange (session_id, question, answer, answer_status, "
         "citations_json, corpus_version, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
         (
@@ -666,7 +666,7 @@ def save_rag_exchange(session_id: str, question: str, result: dict) -> dict:
     )
     conn.commit()
     return {
-        "exchange_id": conn.execute("SELECT last_insert_rowid()").fetchone()[0],
+        "exchange_id": cur.lastrowid,
         "session_id": session_id,
         "question": question,
         "answer": result["answer"],
@@ -889,14 +889,14 @@ def save_export_record(approval_id: int, file_name: str, export_file_hash: str) 
     """FR-APR-05: mỗi file DOCX một Export Record riêng, không ghi đè."""
     conn = _conn()
     now = _now()
-    conn.execute(
+    cur = conn.execute(
         "INSERT INTO export_record (approval_id, file_name, export_file_hash, exported_at) "
         "VALUES (?, ?, ?, ?)",
         (approval_id, file_name, export_file_hash, now),
     )
     conn.commit()
     return {
-        "export_id": conn.execute("SELECT last_insert_rowid()").fetchone()[0],
+        "export_id": cur.lastrowid,
         "approval_id": approval_id,
         "file_name": file_name,
         "export_file_hash": export_file_hash,
