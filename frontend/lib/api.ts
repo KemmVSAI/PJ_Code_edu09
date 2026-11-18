@@ -372,3 +372,84 @@ export async function getDraft(sessionId: string): Promise<DraftInfo> {
   const resp = await fetch(`${API_BASE}/api/v1/sessions/${sessionId}/draft`);
   return handle<DraftInfo>(resp);
 }
+
+// ---------------------------------------------------------------------------
+// Approval & Export (W5) — khớp schemas.py
+// ---------------------------------------------------------------------------
+
+export interface ApprovalInfo {
+  approval_id: number;
+  session_id: string;
+  draft_id: number;
+  approved_version: number;
+  approved_content_hash: string;
+  approved_corpus_version: number;
+  status: "Active" | "Invalidated";
+  approved_at: string;
+}
+
+export interface ExportRecord {
+  export_id: number;
+  approval_id: number;
+  file_name: string;
+  export_file_hash: string;
+  exported_at: string;
+}
+
+export interface ExportResult {
+  export_id: number;
+  approval_id: number;
+  file_name: string;
+  export_file_hash: string;
+  exported_at: string;
+  file_base64: string;
+  approved_content_hash: string;
+}
+
+export async function approveDraft(sessionId: string, draftId: number): Promise<ApprovalInfo> {
+  const resp = await fetch(`${API_BASE}/api/v1/draft/approve`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ session_id: sessionId, draft_id: draftId }),
+  });
+  return handle<ApprovalInfo>(resp);
+}
+
+export async function getApproval(sessionId: string, draftId: number): Promise<ApprovalInfo> {
+  const resp = await fetch(`${API_BASE}/api/v1/sessions/${sessionId}/approval?draft_id=${draftId}`);
+  return handle<ApprovalInfo>(resp);
+}
+
+export async function getExportHistory(sessionId: string, approvalId: number): Promise<ExportRecord[]> {
+  const resp = await fetch(
+    `${API_BASE}/api/v1/sessions/${sessionId}/exports?approval_id=${approvalId}`,
+  );
+  return handle<ExportRecord[]>(resp);
+}
+
+export async function exportDocx(sessionId: string, draftId: number): Promise<ExportResult> {
+  const resp = await fetch(`${API_BASE}/api/v1/export`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ session_id: sessionId, draft_id: draftId }),
+  });
+  return handle<ExportResult>(resp);
+}
+
+/** Tải file DOCX từ base64 về máy người dùng. */
+export function downloadDocx(result: ExportResult): void {
+  const binary = atob(result.file_base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  const blob = new Blob([bytes], {
+    type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = result.file_name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}

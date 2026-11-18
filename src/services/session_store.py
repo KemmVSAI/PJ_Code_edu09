@@ -80,6 +80,27 @@ CREATE TABLE IF NOT EXISTS review_draft (
     updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS approval_snapshot (
+    approval_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL,
+    draft_id INTEGER NOT NULL,
+    approved_version INTEGER NOT NULL DEFAULT 1,
+    approved_content_snapshot TEXT NOT NULL,
+    approved_content_hash TEXT NOT NULL,
+    approved_corpus_version INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'Active' CHECK (status IN ('Active', 'Invalidated')),
+    approved_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS export_record (
+    export_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    approval_id INTEGER NOT NULL,
+    file_name TEXT NOT NULL,
+    export_file_hash TEXT NOT NULL,
+    exported_at TEXT NOT NULL,
+    FOREIGN KEY (approval_id) REFERENCES approval_snapshot (approval_id)
+);
+
 CREATE TABLE IF NOT EXISTS rag_exchange (
     exchange_id INTEGER PRIMARY KEY AUTOINCREMENT,
     session_id TEXT NOT NULL,
@@ -744,3 +765,175 @@ def set_draft_status(session_id: str, draft_id: int, status: str) -> dict | None
     )
     _conn().commit()
     return get_latest_draft(session_id)
+
+# ---------------------------------------------------------------------------
+# Approval Snapshot & Export Record (W5 — PRD v1.1 mục 11.2 Approval/Export).
+# ---------------------------------------------------------------------------
+
+def create_approval_snapshot(session_id: str, draft_id: int) -> dict | None:
+    """Tạo Approval Snapshot bất biến khi người dùng duyệt (FR-APR-02).
+
+    - approved_content_snapshot: nội dung canonical bất biến (content + matrix
+      + claims của draft tại thời điểm duyệt).
+    - approved_content_hash: hash canonical content.
+    - approved_corpus_version: corpus version HIỆN HÀNH của session tại thời
+      điểm duyệt (FR-APR-02) — không phải corpus version lúc tạo draft.
+    Snapshot Active duy nhất cho một draft; approve lại → snapshot cũ invalidated.
+    """
+    draft = get_draft_by_id(session_id, draft_id)
+    if draft is None:
+        return None
+    if draft["unsupported_count"] > 0:
+        return {"error": "unsupported_claims", "unsupported_count": draft["unsupported_count"]}
+
+    conn = _conn()
+    now = _now()
+    # FR-APR-03/07: approve lại cùng draft → snapshot cũ invalidated
+    conn.execute(
+        "UPDATE approval_snapshot SET status = 'Invalidated' "
+        "WHERE session_id = ? AND draft_id = ? AND status = 'Active'",
+        (session_id, draft_id),
+    )
+    import hashlib
+
+    content_hash = hashlib.sha256(draft["content"].encode()).hexdigest()
+    snapshot = {
+        "content": draft["content"],
+        "comparison_matrix": draft["matrix"],
+        "claims": draft["claims"],
+    }
+    # FR-APR-02: approved_corpus_version = corpus version HIỆN HÀNH của session
+    current_corpus_version = get_session(session_id)["corpus_version"]
+    conn.execute(
+        "INSERT INTO approval_snapshot (session_id, draft_id, approved_version, "
+        "approved_content_snapshot, approved_content_hash, approved_corpus_version, "
+        "status, approved_at) VALUES (?, ?, 1, ?, ?, ?, 'Active', ?)",
+        (
+            session_id,
+            draft_id,
+            json.dumps(snapshot, ensure_ascii=False),
+            content_hash,
+            current_corpus_version,
+            now,
+        ),
+    )
+    conn.execute(
+        "UPDATE review_draft SET status = 'Approved', updated_at = ? "
+        "WHERE session_id = ? AND draft_id = ?",
+        (now, session_id, draft_id),
+    )
+    conn.commit()
+    return get_active_approval(session_id, draft_id)
+
+
+def get_active_approval(session_id: str, draft_id: int) -> dict | None:
+    row = _conn().execute(
+        "SELECT * FROM approval_snapshot WHERE session_id = ? AND draft_id = ? "
+        "AND status = 'Active' ORDER BY approval_id DESC LIMIT 1",
+        (session_id, draft_id),
+    ).fetchone()
+    return _approval_row(row) if row else None
+
+
+def get_draft_by_id(session_id: str, draft_id: int) -> dict | None:
+    row = _conn().execute(
+        "SELECT * FROM review_draft WHERE session_id = ? AND draft_id = ?",
+        (session_id, draft_id),
+    ).fetchone()
+    return _draft_row(row) if row else None
+
+
+def invalidate_approval_for_session(session_id: str) -> int:
+    """FR-APR-08: corpus_version đổi → invalidate mọi snapshot Active của session.
+
+    Trả số snapshot bị invalidate. Gọi ở route khi screen/review làm membership đổi.
+    """
+    conn = _conn()
+    cur = conn.execute(
+        "UPDATE approval_snapshot SET status = 'Invalidated' "
+        "WHERE session_id = ? AND status = 'Active'",
+        (session_id,),
+    )
+    conn.commit()
+    return cur.rowcount
+
+
+def _approval_row(row) -> dict:
+    return {
+        "approval_id": row["approval_id"],
+        "session_id": row["session_id"],
+        "draft_id": row["draft_id"],
+        "approved_version": row["approved_version"],
+        "approved_content_snapshot": json.loads(row["approved_content_snapshot"] or "{}"),
+        "approved_content_hash": row["approved_content_hash"],
+        "approved_corpus_version": row["approved_corpus_version"],
+        "status": row["status"],
+        "approved_at": row["approved_at"],
+    }
+
+
+def invalidate_stale_approvals(session_id: str, current_corpus_version: int) -> int:
+    """FR-APR-08: snapshot Active nhưng approved_corpus_version khác corpus hiện
+    hành → invalidate. Trả số snapshot bị invalidate."""
+    conn = _conn()
+    cur = conn.execute(
+        "UPDATE approval_snapshot SET status = 'Invalidated' "
+        "WHERE session_id = ? AND status = 'Active' AND approved_corpus_version != ?",
+        (session_id, current_corpus_version),
+    )
+    conn.commit()
+    return cur.rowcount
+
+
+def save_export_record(approval_id: int, file_name: str, export_file_hash: str) -> dict:
+    """FR-APR-05: mỗi file DOCX một Export Record riêng, không ghi đè."""
+    conn = _conn()
+    now = _now()
+    conn.execute(
+        "INSERT INTO export_record (approval_id, file_name, export_file_hash, exported_at) "
+        "VALUES (?, ?, ?, ?)",
+        (approval_id, file_name, export_file_hash, now),
+    )
+    conn.commit()
+    return {
+        "export_id": conn.execute("SELECT last_insert_rowid()").fetchone()[0],
+        "approval_id": approval_id,
+        "file_name": file_name,
+        "export_file_hash": export_file_hash,
+        "exported_at": now,
+    }
+
+
+def list_export_records(approval_id: int) -> list[dict]:
+    rows = _conn().execute(
+        "SELECT * FROM export_record WHERE approval_id = ? ORDER BY export_id DESC",
+        (approval_id,),
+    ).fetchall()
+    return [
+        {
+            "export_id": r["export_id"],
+            "approval_id": r["approval_id"],
+            "file_name": r["file_name"],
+            "export_file_hash": r["export_file_hash"],
+            "exported_at": r["exported_at"],
+        }
+        for r in rows
+    ]
+
+def update_draft_content(session_id: str, draft_id: int, content: str) -> dict | None:
+    """Sửa nội dung draft (FR-APR-03/07): content mới + hash mới + về Pending Review.
+
+    Điểm DUY NHẤT được phép sửa content — bảo đảm content_hash luôn khớp content.
+    """
+    import hashlib
+
+    conn = _conn()
+    now = _now()
+    content_hash = hashlib.sha256(content.encode()).hexdigest()
+    conn.execute(
+        "UPDATE review_draft SET content = ?, content_hash = ?, status = 'Pending Review', "
+        "updated_at = ? WHERE session_id = ? AND draft_id = ?",
+        (content, content_hash, now, session_id, draft_id),
+    )
+    conn.commit()
+    return get_draft_by_id(session_id, draft_id)

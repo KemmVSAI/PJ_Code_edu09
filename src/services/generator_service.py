@@ -113,11 +113,11 @@ def _papers_block(papers: list[PaperOut], summaries: dict[str, dict]) -> str:
     for i, paper in enumerate(papers, start=1):
         summary = summaries.get(paper.paper_id)
         fields = summary.get("fields", {}) if summary else {}
-        parts = [f"[P{i}] {paper.title[:80]} ({paper.year or 'n/a'}) {paper.source_type}"]
+        parts = [f"[P{i}] {paper.title[:60]} ({paper.year or 'n/a'}) {paper.source_type}"]
         for field in ("Research Objective", "Methodology", "Dataset", "Results", "Limitations"):
             f = fields.get(field)
             if f and not f.get("not_mentioned") and f.get("value"):
-                parts.append(f"{field}: {f['value'][:200]}")
+                parts.append(f"{field}: {f['value'][:120]}")
         blocks.append(" | ".join(parts))
     return "\n".join(blocks)
 

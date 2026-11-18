@@ -313,3 +313,34 @@ class GenerateResponse(BaseModel):
 class DraftStatusRequest(BaseModel):
     draft_id: int
     status: Literal["Draft", "Pending Review", "Approved", "Stale"]
+
+# ---------------------------------------------------------------------------
+# Approval & Export (W5) — schemas
+# ---------------------------------------------------------------------------
+
+
+class ApproveRequest(BaseModel):
+    session_id: str
+    draft_id: int
+
+
+class ApproveResponse(BaseModel):
+    approval_id: int
+    session_id: str
+    draft_id: int
+    approved_version: int
+    approved_content_hash: str
+    approved_corpus_version: int
+    status: str = "Active"
+    approved_at: str
+
+
+class ExportResponse(BaseModel):
+    export_id: int
+    approval_id: int
+    file_name: str
+    export_file_hash: str
+    exported_at: str
+    file_base64: str = Field(..., description="File DOCX nhị phân base64 — frontend tải về")
+    approved_content_hash: str = Field(..., description="Khớp snapshot — phân biệt với export_file_hash")
+
