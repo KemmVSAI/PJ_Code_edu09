@@ -1,0 +1,77 @@
+# E2E scenarios — kịch bản đánh giá End-to-End Task Completion (PRD mục 15.3)
+# Mỗi kịch bản: steps (tuần tự API), expect (điều kiện pass). Có nhánh tiêu cực.
+scenarios:
+  - id: e2e_happy
+    name: "Happy path — đầy đủ workflow"
+    priority: P0
+    steps:
+      - POST /sessions {research_question}          → 200, session_id
+      - POST /search {query}                        → 200, results ≥ 1
+      - POST /sessions/papers {2 paper_ids}         → 200, added=2
+      - POST /screen                                → completed, 4 nhãn hợp lệ
+      - POST /screen/review {accept x2}             → in_corpus=true, corpus_version tăng
+      - POST /summary {paper_id}                    → completed, 5 trường có provenance
+      - POST /rag {câu hỏi trong corpus}            → answer_status ∈ {sufficient, insufficient}
+      - POST /generate                              → completed, matrix rows = corpus count
+      - POST /draft/approve                         → Active snapshot (nếu không có unsupported)
+      - POST /export                                → 200, DOCX PK header, export_id
+    expect: "mỗi bước đúng schema; DOCX chứa RQ + References; export_file_hash ≠ content_hash"
+
+  - id: e2e_no_evidence
+    name: "RAG ngoài phạm vi — phải abstain"
+    priority: P0
+    steps:
+      - ... (như happy đến có corpus)
+      - POST /rag {câu hỏi ngoài corpus: "Who won World Cup 2022?"}
+    expect: "answer_status = no_matching_evidence; citations rỗng; KHÔNG có câu trả lời bịa"
+
+  - id: e2e_reject_all
+    name: "Reject tất cả → corpus rỗng → Generate chặn"
+    priority: P0
+    steps:
+      - ... screen xong
+      - POST /screen/review {reject mọi paper}
+      - POST /generate
+    expect: "422 với thông báo Confirmed Corpus rỗng (FR-GEN-02)"
+
+  - id: e2e_approve_blocked_by_unsupported
+    name: "Claim unsupported → Approve chặn (FR-APR-09)"
+    priority: P0
+    steps:
+      - ... generate ra draft có claim unsupported
+      - POST /draft/approve
+    expect: "422 với thông báo FR-APR-09"
+
+  - id: e2e_edit_after_approve
+    name: "Sửa draft sau approve → export chặn (FR-APR-03/07)"
+    priority: P1
+    steps:
+      - ... approve xong
+      - UPDATE review_draft content (update_draft_content)
+      - POST /export
+    expect: "422 FR-APR-04a; approve lại → export OK với snapshot mới"
+
+  - id: e2e_corpus_change_invalidates
+    name: "Corpus đổi → approval invalidated (FR-APR-08)"
+    priority: P1
+    steps:
+      - ... approve xong (corpus v3)
+      - Accept thêm paper (corpus v4)
+      - POST /export
+    expect: "422 FR-APR-04c; approve lại theo v4 → export OK"
+
+  - id: e2e_summary_metadata_only
+    name: "Paper metadata-only → không suy diễn (FR-SUMM-08)"
+    priority: P0
+    steps:
+      - ... thêm paper metadata_only vào corpus
+      - POST /summary {paper metadata_only}
+    expect: "completed; 4 trường M/D/R/L = not_mentioned; không gọi LLM cho nội dung suy diễn"
+
+  - id: e2e_screening_insufficient
+    name: "Insufficient Evidence không Accept trực tiếp (FR-SCRN-05)"
+    priority: P0
+    steps:
+      - ... screen
+      - POST /screen/review {decision: accept, paper: Insufficient Evidence}
+    expect: "422 với thông báo FR-SCRN-05"

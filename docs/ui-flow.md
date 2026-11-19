@@ -80,3 +80,6 @@ flowchart LR
 | Approval → Export | Approval snapshot khớp corpus hiện tại, không stale |
 | Bất kỳ processing → Error | Timeout, quota, upstream/API failure hoặc output không hợp lệ sau retry |
 
+---
+
+> **Wireframe chi tiết từng màn hình** (layout, component, trạng thái): xem [wireframes.md](wireframes.md).

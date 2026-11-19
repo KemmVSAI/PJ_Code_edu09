@@ -345,6 +345,8 @@ Testing bắt đầu từ tuần 1; tuần 5 chỉ tích hợp/regression, khôn
 | Q-03 | Cơ chế Reviewer truy cập session | Prototype sharing tối thiểu hoặc giữ single-user | Cuối tuần 2 |
 | Q-04 | Có user study Time Reduction không | Chỉ làm nếu còn thời gian; không phải điều kiện MVP | Tuần 5 |
 
+Bộ dữ liệu đánh giá — nguồn, quy trình xây dựng, đặc tính: xem [docs/eval-dataset.md](eval-dataset.md).
+
 Mọi quyết định làm thay đổi API contract, data model, stack hoặc scope phải cập
 nhật mục 9 và mục này trong cùng PR với code.
 

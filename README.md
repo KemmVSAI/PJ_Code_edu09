@@ -10,7 +10,7 @@ Tài liệu sản phẩm:
 - [Gate 1 submission index](docs/gate-1.md)
 - [Project Brief](docs/brief.md)
 - [PRD](docs/prd.md)
-- [Wireframe / UI Flow](docs/ui-flow.md)
+- [Wireframe / UI Flow](docs/ui-flow.md) · [Wireframe chi tiết](docs/wireframes.md)
 
 Technical Guidebook: <https://phoenix.note.transformerlabs.ai/technical-book>
 

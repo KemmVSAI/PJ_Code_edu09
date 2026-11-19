@@ -58,6 +58,49 @@ BANNED_INPUT_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
         "data_exfiltration_tool_abuse",
         re.compile(r"(send|post|upload)\s+(all\s+)?(the\s+)?(system\s+prompt|api\s*key|secret)", re.I),
     ),
+    # G1b — phạm vi sản phẩm: nhóm câu KHÔNG được tự trả lời (yêu cầu mentor
+    # Gate 1: "câu nào thuộc nhóm không được tự trả lời, chặn ở tầng nào").
+    (
+        "harmful_code_request",
+        re.compile(
+            r"(viết|code|viết\s+hộ)\s+.*(phishing|malware|keylogger|exploit|"
+            r"lừa\s+đảo|trojan|ransomware)",
+            re.I,
+        ),
+    ),
+    (
+        "harmful_content",
+        re.compile(
+            r"(cách\s+(làm|chế|tạo)|how\s+to\s+(make|build|create))\s+"
+            r"(bom|bomba|vũ\s+khí|weapon|phishing|malware|virus|drug|ma\s+túy)",
+            re.I,
+        ),
+    ),
+    (
+        "medical_emergency_advice",
+        re.compile(
+            r"(tôi|i)\s+(bị|mắc|feel)\s+.*(đau\s+bụng|đau\s+ngực|khó\s+thở|ra\s+máu|"
+            r"vỡ\s+ối|tự\s+hại|chest\s+pain|can't\s+breathe|bleeding)",
+            re.I,
+        ),
+    ),
+    (
+        "personal_medical_legal_financial",
+        re.compile(
+            r"(chẩn\s+đoán|bị\s+bệnh\s+gì|uống\s+thuốc\s+gì|mua\s+thuốc)|"
+            r"(should\s+i\s+(invest|buy)|đầu\s+tư\s+vào\s+đâu|mua\s+coin|crypto\s+tip)|"
+            r"(tôi\s+nên\s+(khởi\s+kiện|ly\s+hôn))",
+            re.I,
+        ),
+    ),
+    (
+        "full_academic_writing",
+        re.compile(
+            r"(viết\s+(hộ|giúp|giùm))\s+(cả\s+)?(cả\s+bài|bài\s+luận\s+văn|luận\s+văn|"
+            r"thesis|entire\s+(essay|chapter)|to\s+àin\s+bài\s+báo)",
+            re.I,
+        ),
+    ),
 )
 
 # Output không được chứa — chống agent tự lộ system prompt / key khi bị dí.

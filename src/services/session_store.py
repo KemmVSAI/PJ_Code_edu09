@@ -937,3 +937,19 @@ def update_draft_content(session_id: str, draft_id: int, content: str) -> dict |
     )
     conn.commit()
     return get_draft_by_id(session_id, draft_id)
+
+def update_draft_claims(session_id: str, draft_id: int, claims: list[dict]) -> dict | None:
+    """Cập nhật claims sau khi người dùng sửa/loại bỏ claim (FR-GEN-06).
+
+    Điểm DUY NHẤT sửa claims — unsupported_count tính lại từ claims mới,
+    tránh trạng thái cũ đè lên kết quả filter.
+    """
+    unsup = sum(1 for c in claims if c.get("support_status") == "unsupported")
+    conn = _conn()
+    conn.execute(
+        "UPDATE review_draft SET claims_json = ?, unsupported_count = ?, updated_at = ? "
+        "WHERE session_id = ? AND draft_id = ?",
+        (json.dumps(claims, ensure_ascii=False), unsup, _now(), session_id, draft_id),
+    )
+    conn.commit()
+    return get_draft_by_id(session_id, draft_id)

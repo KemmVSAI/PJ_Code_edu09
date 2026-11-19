@@ -36,7 +36,7 @@ class Settings(BaseSettings):
     # tổng tokens khả dụng; yêu cầu 16384 mặc định của ChatOpenAI sẽ bị từ chối
     # (402 "requires more credits, or fewer max_tokens"). 2048 đủ cho classify
     # (JSON 1 object) và generation MVP; đổi bằng OPENAI_MAX_TOKENS.
-    llm_max_tokens: int = Field(default=95, ge=64, le=32768)
+    llm_max_tokens: int = Field(default=4096, ge=64, le=32768)
 
     # Agent loop — escape hatch chống loop vô hạn (bài học team 011:
     # luôn phải có một đường tới END dù LLM cứ đòi gọi tool mãi)
